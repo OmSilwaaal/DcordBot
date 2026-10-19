@@ -1,0 +1,28 @@
+{
+  "name": "meme-signal-discord",
+  "version": "2.0.0",
+  "description": "Pump.fun meme coin signal generator for Discord: real-time trade-flow features, on-chain safety checks, forward-tested performance tracking.",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js",
+    "analyze": "node dist/tools/analyze.js",
+    "clean": "rm -rf dist"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "discord.js": "^14.27.0",
+    "dotenv": "^18.0.8",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2"
+  }
+}
