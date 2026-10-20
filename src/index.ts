@@ -6,6 +6,7 @@ import { SolPriceFeed } from './feeds/solPrice.js';
 import { runDiagnostics } from './signals/diagnostics.js';
 import { SignalEngine } from './signals/engine.js';
 import { PerformanceTracker } from './signals/performance.js';
+import { SkinScanner } from './skins/scanner.js';
 import { assertWritable, DATA_DIR } from './utils/files.js';
 import { startHealthServer } from './utils/health.js';
 import { log } from './utils/logger.js';
@@ -31,6 +32,12 @@ async function main(): Promise<void> {
   engine.start();
   feed.start();
 
+  const skins = config.skins.enabled ? new SkinScanner(() => discord.skinChannel) : null;
+  if (skins) {
+    discord.setSkins(skins);
+    skins.start();
+  }
+
   startHealthServer(config.healthPort, () => ({
     websocket: feed.connected ? 'up' : 'down',
     tracked: engine.tracker.size,
@@ -46,6 +53,7 @@ async function main(): Promise<void> {
     shuttingDown = true;
     log.info('shutting down…');
     engine.stop();
+    skins?.stop();
     feed.stop();
     sol.stop();
     perf.markDirty();

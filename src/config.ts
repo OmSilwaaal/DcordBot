@@ -178,6 +178,29 @@ export const config = {
     snapshotAgesSec: list('SNAPSHOT_AGES_SEC', ['60', '180', '300']).map(Number).filter(Number.isFinite),
   },
 
+  /** CS2 skin/knife deal alerts (read-only; never buys anything). Fees live in skins/fees.ts. */
+  skins: {
+    enabled: bool('SKINS_ENABLED', false),
+    /** Own channel, e.g. #skin-deals. */
+    channelId: str('SKINS_CHANNEL_ID', ''),
+    /** Skinport caches /items and /sales/history for 5 minutes, so polling faster gains nothing. */
+    intervalMin: Math.max(5, num('SKINS_INTERVAL_MIN', 5)),
+    /** Alert threshold as a fraction: 0.05 = 5% net of fees. */
+    minNetEdge: num('SKINS_MIN_NET_EDGE', 0.05),
+    /** Optional CSFloat API key (free, from your CSFloat profile). Enables a second price check. */
+    csfloatKey: str('CSFLOAT_API_KEY', ''),
+    /** Edges above this are discarded as mismatched comparisons. */
+    maxNetEdge: num('SKINS_MAX_NET_EDGE', 0.6),
+    /** Reference price needs at least this many sales in 7 days. */
+    minSales7d: num('SKINS_MIN_SALES_7D', 3),
+    minPrice: num('SKINS_MIN_PRICE', 20),
+    maxPrice: num('SKINS_MAX_PRICE', 2000),
+    knivesOnly: bool('SKINS_KNIVES_ONLY', true),
+    maxAlertsPerScan: num('SKINS_MAX_ALERTS_PER_SCAN', 5),
+    /** Days after an alert before its outcome is logged for backtesting. */
+    outcomeDays: num('SKINS_OUTCOME_DAYS', 7),
+  },
+
   /** Railway (and most PaaS) inject PORT; HEALTH_PORT overrides it. */
   healthPort: num('HEALTH_PORT', num('PORT', 8080)),
 };

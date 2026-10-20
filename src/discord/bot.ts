@@ -14,6 +14,8 @@ import type { SignalRecord } from '../types.js';
 import { log } from '../utils/logger.js';
 import type { DiagReport } from '../signals/diagnostics.js';
 import type { SignalEngine } from '../signals/engine.js';
+import { breakEvenSpread } from '../skins/fees.js';
+import { dealEmbed, type SkinScanner } from '../skins/scanner.js';
 import {
   clean,
   filtersEmbed,
@@ -37,11 +39,21 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('test').setDescription('Post a clearly-labelled fake signal to the signals channel'),
 ].map((c) => c.toJSON());
 
+const SKIN_COMMANDS = [
+  new SlashCommandBuilder()
+    .setName('deals')
+    .setDescription('Current CS2 deals found by the last Skinport scan')
+    .addNumberOption((o) => o.setName('min_edge').setDescription('Minimum net edge in % (default: alert threshold)').setMinValue(0).setMaxValue(200)),
+  new SlashCommandBuilder().setName('skinstatus').setDescription('Skin scanner health: last scan, fees, thresholds'),
+].map((c) => c.toJSON());
+
 export class DiscordNotifier implements Notifier {
   readonly client = new Client({ intents: [GatewayIntentBits.Guilds] });
   private channel: SendableChannels | null = null;
   private diagnostics: (() => Promise<DiagReport>) | null = null;
   private engine: SignalEngine | null = null;
+  private skins: SkinScanner | null = null;
+  skinChannel: SendableChannels | null = null;
 
   constructor(private readonly perf: PerformanceTracker) {}
 
@@ -86,6 +98,7 @@ export class DiscordNotifier implements Notifier {
       if (missing.length) throw new Error(`Bot can see #${ch.name} but is missing permissions: ${missing.join(', ')}`);
     }
     this.channel = ch;
+    await this.resolveSkinChannel();
     await this.registerCommands();
     if (config.discord.startupMessage) {
       await ch
@@ -98,6 +111,23 @@ export class DiscordNotifier implements Notifier {
   setDiagnostics(fn: () => Promise<DiagReport>, engine: SignalEngine): void {
     this.diagnostics = fn;
     this.engine = engine;
+  }
+
+  setSkins(scanner: SkinScanner): void {
+    this.skins = scanner;
+  }
+
+  /** Optional: skin alerts go to their own channel. A bad ID disables skin alerts, never the signal bot. */
+  private async resolveSkinChannel(): Promise<void> {
+    const { enabled, channelId } = config.skins;
+    if (!enabled) return;
+    try {
+      const ch = channelId ? await this.client.channels.fetch(channelId) : null;
+      if (!ch || !ch.isSendable()) throw new Error(`SKINS_CHANNEL_ID ${channelId || '(unset)'} is not a sendable text channel`);
+      this.skinChannel = ch;
+    } catch (e) {
+      log.warn('[skins] channel unavailable, skin alerts will be logged only', e);
+    }
   }
 
   async stop(): Promise<void> {
@@ -121,13 +151,17 @@ export class DiscordNotifier implements Notifier {
     }
   }
 
+  private commands() {
+    return config.skins.enabled ? [...COMMANDS, ...SKIN_COMMANDS] : COMMANDS;
+  }
+
   private async registerCommands(): Promise<void> {
     try {
       if (config.discord.guildId) {
         const guild = await this.client.guilds.fetch(config.discord.guildId);
-        await guild.commands.set(COMMANDS);
+        await guild.commands.set(this.commands());
       } else {
-        await this.client.application?.commands.set(COMMANDS);
+        await this.client.application?.commands.set(this.commands());
       }
       log.info('[discord] slash commands registered');
     } catch (e) {
@@ -164,6 +198,33 @@ export class DiscordNotifier implements Notifier {
           return;
         }
         await i.reply({ embeds: [funnelEmbed(this.engine.funnelReport())] });
+      } else if (i.commandName === 'deals') {
+        if (!this.skins) {
+          await i.reply({ content: 'Skin scanner is not enabled (SKINS_ENABLED=true).', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const min = (i.options.getNumber('min_edge') ?? config.skins.minNetEdge * 100) / 100;
+        const deals = this.skins.lastDeals.filter((d) => d.edge >= min).slice(0, 5);
+        if (!deals.length) {
+          await i.reply({ content: `No deals at ≥${(min * 100).toFixed(1)}% net edge in the last scan.`, flags: MessageFlags.Ephemeral });
+          return;
+        }
+        await i.reply({ embeds: deals.map(dealEmbed) });
+      } else if (i.commandName === 'skinstatus') {
+        if (!this.skins) {
+          await i.reply({ content: 'Skin scanner is not enabled (SKINS_ENABLED=true).', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        const k = this.skins;
+        const last = k.lastScanAt ? `<t:${Math.floor(k.lastScanAt / 1000)}:R>` : 'never';
+        await i.reply({
+          content:
+            `**Skin scanner** · last scan ${last} · ${k.scanned} items · deals ${k.lastDeals.length}` +
+            (k.lastError ? ` · ⚠️ ${k.lastError}` : '') +
+            `
+Min net edge ${(config.skins.minNetEdge * 100).toFixed(1)}% · Skinport break-even spread ${(breakEvenSpread('skinport') * 100).toFixed(1)}% · read-only`,
+          flags: MessageFlags.Ephemeral,
+        });
       } else if (i.commandName === 'test') {
         if (!this.channel) {
           await i.reply({ content: 'Signals channel not ready.', flags: MessageFlags.Ephemeral });

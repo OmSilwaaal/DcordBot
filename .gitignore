@@ -4,3 +4,6 @@ data/
 logs/
 .env
 .DS_Store
+graphify-out/
+.graphify_python
+.graphify_*.json
