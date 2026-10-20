@@ -73,6 +73,9 @@ export function signalEmbed(r: SignalRecord): EmbedBuilder {
       },
       { name: '🛡️ Checks', value: `${checks}\n${rc}`, inline: true },
       { name: '🔗 Socials', value: socials, inline: true },
+      { name: '👤 Creator', value: creatorLine(f), inline: true },
+      { name: '🕵️ Wallets', value: walletLine(r), inline: true },
+      { name: '📣 Attention', value: attentionLine(r), inline: true },
       {
         name: '🧮 Score breakdown',
         value: `Vel ${pt.velocity} · Flow ${pt.flow} · Press ${pt.pressure}\nDist ${pt.distribution} · Org ${pt.organic} · Soc ${pt.socials} · Tick ${pt.ticker}`,
@@ -93,6 +96,33 @@ export function signalEmbed(r: SignalRecord): EmbedBuilder {
 
   if (r.finalizedAt) e.addFields({ name: '🏁 Result', value: resultLine(r) });
   return e;
+}
+
+function creatorLine(f: SignalRecord['features']): string {
+  if (f.creatorPriorLaunches === 0) return 'First launch seen from this wallet';
+  const last = f.creatorMinSinceLast < 0 ? '' : ` · last ${f.creatorMinSinceLast < 120 ? `${f.creatorMinSinceLast.toFixed(0)}m` : `${(f.creatorMinSinceLast / 60).toFixed(0)}h`} ago`;
+  return `${f.creatorPriorLaunches} prior (${f.creatorLaunches24h} in 24h) · ${f.creatorPriorGraduated} graduated${last}`;
+}
+
+function walletLine(r: SignalRecord): string {
+  const w = r.wallets;
+  if (!w) return 'not analyzed';
+  return (
+    `Fresh ${p0(w.freshPct)} · low-activity ${p0(w.lowActivityPct)} (n=${w.sampled})\n` +
+    `Clusters ${w.clusters}${w.clusters ? ` (max ${w.largestCluster}) hold ${p1(w.clusterHoldPct)}` : ''} · dev-funded ${w.devFundedBuyers}`
+  );
+}
+
+function attentionLine(r: SignalRecord): string {
+  const d = r.dexOrders;
+  const dex = d
+    ? `DexS: profile ${d.paidProfile ? '✅' : '–'}${d.communityTakeover ? ' · CTO' : ''}${d.boosts ? ` · ${d.boosts} boosts` : ''}${d.ads ? ` · ${d.ads} ads` : ''}`
+    : 'DexS: –';
+  const x = r.x;
+  const xl = x
+    ? `X: ${x.posts}${x.capped ? '+' : ''} posts · ${x.authors} authors · med ${Math.round(x.medianFollowers)} followers`
+    : `X: ${config.x.mode === 'off' ? 'off' : 'no data'}`;
+  return `${dex}\n${xl}`;
 }
 
 export function resultLine(r: SignalRecord): string {
@@ -148,6 +178,12 @@ export function filtersEmbed(): EmbedBuilder {
         value: `Top3 vol ≤ ${g.maxVolConcTop3Pct}% · Churn ≤ ${g.maxWashPct}% · Off peak ≤ ${g.maxDrawdownPct}% · Ticker dupes ≤ ${g.maxTickerDupes}\nScore ≥ ${config.scoring.minScore}`,
       },
       {
+        name: 'Wallets (verify)',
+        value:
+          `Fresh ≤ ${g.maxFreshWalletPct}% · cluster-held ≤ ${g.maxClusterHoldPct}% · dev-funded buyers ≤ ${g.maxDevFundedBuyers}` +
+          ` · creator launches/24h ≤ ${g.maxCreatorLaunches24h}\n_Values of 100 / 1000 mean log-only (gate off)._`,
+      },
+      {
         name: 'Plan',
         value: `SL −${pl.stopLossPct}% · TP ${pl.takeProfitMult}× · Time ${pl.timeStopMin}m · Slip ${pl.entrySlippagePct}% · Costs ${pl.roundTripCostPct}%`,
       },
@@ -200,7 +236,12 @@ export function testSignalEmbed(): EmbedBuilder {
       newBuyersPerMin: 14.2, buyerAccel: 3, buys5m: 70, sells5m: 31, buyCountPct5m: 69, buySolPct5m: 72,
       volSol5m: 48, netFlowSol5m: 21, netFlowRelPct: 13, medianBuySol5m: 0.31, top10Pct: 19.5, maxHolderPct: 4.2,
       devPct: 2.1, devSoldPct: 0, sniperPct: 5.5, volConcTop3Pct: 24, washPct: 4, drawdownPct: 8, tickerDupes: 0,
+      repeatSizePct5m: 6, creatorPriorLaunches: 2, creatorLaunches24h: 1, creatorPriorGraduated: 0,
+      creatorBestPriorPeakSol: 95, creatorMinSinceLast: 340, launchesPerMin: 14, graduations1h: 9, solChange1hPct: 0.4,
     },
+    wallets: { ok: true, sampled: 20, freshPct: 15, lowActivityPct: 20, clusters: 1, largestCluster: 2, clusterWallets: 2, clusterHoldPct: 1.8, devFundedBuyers: 0 },
+    dexOrders: { ok: true, paidProfile: true, communityTakeover: false, ads: 0, boosts: 0, minToFirstPaid: 4 },
+    x: { ok: true, posts: 3, capped: false, authors: 3, medianFollowers: 210, newAccountPct: 33 },
     onchain: { ok: true, mintAuthority: null, freezeAuthority: null, dangerousExtensions: [], top10Pct: 21.3, maxHolderPct: 4.4 },
     rugcheck: { status: 'ok', dangers: [], warnings: [] },
     socials: null,

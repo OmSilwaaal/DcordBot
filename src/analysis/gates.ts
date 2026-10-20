@@ -37,6 +37,12 @@ export const GATES: Gate[] = [
     test: (f, g) => (f.tickerDupes > g.maxTickerDupes ? `copycat ticker (${f.tickerDupes} earlier launches)` : null),
   },
   {
+    key: 'serialCreator',
+    label: (g) => `creator launched > ${g.maxCreatorLaunches24h} tokens in 24h`,
+    test: (f, g) =>
+      f.creatorLaunches24h > g.maxCreatorLaunches24h ? `serial creator (${f.creatorLaunches24h} launches/24h)` : null,
+  },
+  {
     key: 'age',
     temporal: true,
     label: (g) => `age < ${g.minAgeSec}s`,

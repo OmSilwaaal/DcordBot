@@ -14,7 +14,7 @@ const DANGEROUS_EXTENSIONS = new Set([
   'pausableConfig',
 ]);
 
-async function rpc<T>(method: string, params: unknown[]): Promise<T> {
+export async function rpc<T>(method: string, params: unknown[]): Promise<T> {
   const r = await fetchJson<{ result?: T; error?: { message: string } }>(config.feeds.rpcUrl, {
     method: 'POST',
     body: { jsonrpc: '2.0', id: 1, method, params },

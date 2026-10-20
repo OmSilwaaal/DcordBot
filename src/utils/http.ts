@@ -14,6 +14,7 @@ interface Opts {
   timeoutMs?: number;
   retries?: number;
   limiter?: RateLimiter;
+  headers?: Record<string, string>;
 }
 
 /**
@@ -22,7 +23,7 @@ interface Opts {
  * "reject", "retry later" or "unknown" — nothing here fails open.
  */
 export async function fetchJson<T>(url: string, opts: Opts = {}): Promise<HttpResult<T>> {
-  const { method = 'GET', body, timeoutMs = 8000, retries = 1, limiter } = opts;
+  const { method = 'GET', body, timeoutMs = 8000, retries = 1, limiter, headers = {} } = opts;
   let last: HttpResult<T> = { ok: false, status: 0, data: null, error: 'not attempted' };
 
   for (let attempt = 0; attempt <= retries; attempt++) {
@@ -37,6 +38,7 @@ export async function fetchJson<T>(url: string, opts: Opts = {}): Promise<HttpRe
           Accept: 'application/json',
           'User-Agent': 'meme-signal-discord/2.0',
           ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...headers,
         },
         body: body !== undefined ? JSON.stringify(body) : undefined,
       });

@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { onchainCheck } from '../analysis/onchain.js';
 import { rugcheck } from '../analysis/rugcheck.js';
+import { xUsage } from '../analysis/xMentions.js';
 import { getPairs, WSOL } from '../feeds/dexscreener.js';
 import type { PumpPortalFeed } from '../feeds/pumpportal.js';
 import type { SolPriceFeed } from '../feeds/solPrice.js';
@@ -103,6 +104,22 @@ export async function runDiagnostics(
     name: 'DexScreener',
     ok: dex > 0,
     detail: dex > 0 ? 'reachable' : 'unreachable — outcome tracking after graduation will lag',
+  });
+
+  const xu = xUsage();
+  checks.push({
+    name: 'X mentions',
+    ok: xu.mode === 'off' ? null : xu.pausedMin > 0 ? false : xu.lastError ? null : true,
+    detail:
+      xu.mode === 'off'
+        ? 'off (set X_BEARER_TOKEN for the official API or X_SCRAPE_API_KEY for scraping)'
+        : `${xu.mode} · ${xu.callsToday}/${xu.cap} searches today` +
+          (xu.pausedMin > 0 ? ` · PAUSED ${xu.pausedMin.toFixed(0)}m: ${xu.lastError}` : xu.lastError ? ` · last error: ${xu.lastError}` : ''),
+  });
+  checks.push({
+    name: 'Creator history',
+    ok: true,
+    detail: `${engine.creators.size} creator wallets on record${config.wallets.enabled ? ' · wallet forensics on' : ' · wallet forensics OFF'}`,
   });
 
   // 6. Persistent storage

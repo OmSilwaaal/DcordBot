@@ -79,6 +79,8 @@ export const config = {
     maxWashPct: num('MAX_WASH_PCT', 30),
     maxDrawdownPct: num('MAX_DRAWDOWN_PCT', 35),
     maxTickerDupes: num('MAX_TICKER_DUPES', 3),
+    /** Serial-launcher cap: creator launches in the last 24h (this one excluded). Off by default — log first. */
+    maxCreatorLaunches24h: num('MAX_CREATOR_LAUNCHES_24H', 1000),
 
     onchainMaxTop10Pct: num('ONCHAIN_MAX_TOP10_PCT', 35),
     onchainMaxSingleHolderPct: num('ONCHAIN_MAX_SINGLE_HOLDER_PCT', 10),
@@ -88,6 +90,48 @@ export const config = {
     requireRugcheck: bool('REQUIRE_RUGCHECK', false),
     /** RugCheck risk names containing these substrings are ignored (LP/liquidity flags don't apply on a bonding curve). */
     rugcheckIgnore: list('RUGCHECK_IGNORE', ['lp', 'liquidity']).map((s) => s.toLowerCase()),
+
+    // Wallet-analysis gates (verify stage). Defaults are OFF (log-only) until the data shows where to set them.
+    maxFreshWalletPct: num('MAX_FRESH_WALLET_PCT', 100),
+    maxClusterHoldPct: num('MAX_CLUSTER_HOLD_PCT', 100),
+    maxDevFundedBuyers: num('MAX_DEV_FUNDED_BUYERS', 1000),
+  },
+
+  /** Early-buyer forensics at verify time: wallet age + who funded each wallet. Costs ~20–45 RPC calls per candidate. */
+  wallets: {
+    enabled: bool('WALLET_ANALYSIS', true),
+    sample: num('WALLET_SAMPLE', 20),
+    freshHours: num('FRESH_WALLET_HOURS', 24),
+    /** Signatures fetched per wallet. Fewer than this = full history seen, so age and funder are known. */
+    historyLimit: num('WALLET_HISTORY_LIMIT', 100),
+    /** A funder with ≥ this many txs is treated as an exchange/service, not a cluster. */
+    busyFunderTxs: num('BUSY_FUNDER_TXS', 1000),
+  },
+
+  dexOrders: {
+    enabled: bool('DEX_ORDERS', true),
+  },
+
+  /**
+   * X (Twitter) mentions of the contract address. Two sources:
+   *  - 'api'    official X API (X_BEARER_TOKEN), billed per post read
+   *  - 'scrape' rettiwt-api logged in as an X account (X_SCRAPE_API_KEY), free but against X's terms:
+   *             use a throwaway account, expect it to get limited or suspended eventually
+   * X_MODE defaults to whichever credential is set (api wins if both are), else off.
+   */
+  x: {
+    mode: (() => {
+      const m = str('X_MODE', '').toLowerCase();
+      if (m === 'api' || m === 'scrape' || m === 'off') return m;
+      return process.env.X_BEARER_TOKEN ? 'api' : process.env.X_SCRAPE_API_KEY ? 'scrape' : 'off';
+    })() as 'api' | 'scrape' | 'off',
+    bearerToken: str('X_BEARER_TOKEN', ''),
+    scrapeApiKey: str('X_SCRAPE_API_KEY', ''),
+    /** Searches per day. Defaults: 20 on the paid API, 150 when scraping. */
+    maxCallsPerDay: num('X_MAX_CALLS_PER_DAY', process.env.X_BEARER_TOKEN && str('X_MODE', '') !== 'scrape' ? 20 : 150),
+    maxResults: num('X_MAX_RESULTS', 10),
+    /** Optional proxy for scrape mode, e.g. http://user:pass@host:port. */
+    scrapeProxy: str('X_SCRAPE_PROXY', ''),
   },
 
   scoring: {

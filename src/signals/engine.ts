@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
 import { config } from '../config.js';
-import { computeFeatures } from '../analysis/features.js';
+import { CreatorBook } from '../analysis/creators.js';
+import { dexOrders } from '../analysis/dexOrders.js';
+import { computeFeatures, type FeatureContext } from '../analysis/features.js';
+import { analyzeWallets } from '../analysis/wallets.js';
+import { xMentions } from '../analysis/xMentions.js';
 import { checkGates, failingGates } from '../analysis/gates.js';
 import { fetchMetadata } from '../analysis/metadata.js';
 import { onchainCheck } from '../analysis/onchain.js';
@@ -44,6 +48,8 @@ export class SignalEngine extends EventEmitter {
   };
   /** Launch timestamps from the last 5 minutes (for /status). */
   private recentCreates: number[] = [];
+  private recentGraduations: number[] = [];
+  readonly creators = new CreatorBook();
   private ticking = false;
   private verifying = new Set<string>();
   private sentTimes: number[] = [];
@@ -76,15 +82,34 @@ export class SignalEngine extends EventEmitter {
     every(30_000, () => this.perf.save());
     every(60_000, () => void this.pollOutcomes());
     every(60_000, () => this.logStatus());
+    every(60_000, () => this.creators.save());
   }
 
   stop(): void {
     for (const t of this.timers) clearInterval(t);
+    this.creators.save();
   }
 
   launchesLast5m(now = Date.now()): number {
-    this.recentCreates = this.recentCreates.filter((t) => now - t < 300_000);
-    return this.recentCreates.length;
+    this.recentCreates = this.recentCreates.filter((t) => now - t < 600_000);
+    return this.recentCreates.filter((t) => now - t < 300_000).length;
+  }
+
+  /** Shared inputs for feature computation: creator history + market conditions. */
+  featureContext(now = Date.now()): FeatureContext {
+    this.recentCreates = this.recentCreates.filter((t) => now - t < 600_000);
+    this.recentGraduations = this.recentGraduations.filter((t) => now - t < 3_600_000);
+    const uptimeMin = Math.max(1, Math.min(10, (now - this.startedAt) / 60_000));
+    return {
+      solUsd: this.sol.value,
+      sniperWindowSec: config.tracking.sniperWindowSec,
+      creator: (c, ts) => this.creators.stats(c, ts),
+      market: {
+        launchesPerMin: this.recentCreates.length / uptimeMin,
+        graduations1h: this.recentGraduations.length,
+        solChange1hPct: this.sol.change1hPct(),
+      },
+    };
   }
 
   /** Newest token old enough to exist on-chain — used by /status to exercise the RPC + RugCheck path for real. */
@@ -100,10 +125,11 @@ export class SignalEngine extends EventEmitter {
 
   /** Closest-to-signaling tokens right now, with the reason each one is still waiting. */
   topCandidates(n = 5, now = Date.now()) {
+    const ctx = this.featureContext(now);
     const rows: { symbol: string; mint: string; score: number; f: Features; reason: string }[] = [];
     for (const s of this.tracker.tokens.values()) {
       if (s.status !== 'watching' && s.status !== 'verifying') continue;
-      const f = computeFeatures(s, now, this.sol.value, config.tracking.sniperWindowSec);
+      const f = computeFeatures(s, now, ctx);
       const gate = checkGates(f);
       const score = computeScore(f, s.metadata ?? null).total;
       const reason =
@@ -127,6 +153,7 @@ export class SignalEngine extends EventEmitter {
     if (this.tracker.get(e.mint)) return;
     const s = this.tracker.create(e);
     this.stats.created++;
+    this.creators.recordLaunch(e.creator, e.mint, e.receivedAt);
     this.recentCreates.push(e.receivedAt);
     if (this.recentCreates.length > 5000) this.recentCreates.splice(0, this.recentCreates.length - 5000);
     if (s.tickerDupes > config.gates.maxTickerDupes) {
@@ -146,6 +173,8 @@ export class SignalEngine extends EventEmitter {
   }
 
   private onMigrate(e: MigrateEvent): void {
+    this.recentGraduations.push(e.receivedAt);
+    this.creators.recordGraduation(e.mint);
     const s = this.tracker.get(e.mint);
     if (s) s.graduated = true;
     this.perf.markGraduated(e.mint);
@@ -158,6 +187,7 @@ export class SignalEngine extends EventEmitter {
     this.ticking = true;
     try {
       const now = Date.now();
+      const ctx = this.featureContext(now);
       for (const s of this.tracker.tokens.values()) {
         const snapAge = this.snapshotDue(s, now);
         const needsEval =
@@ -166,7 +196,7 @@ export class SignalEngine extends EventEmitter {
           (s.dirty || now - s.lastEvalAt >= 10_000);
         if (snapAge === null && !needsEval) continue;
 
-        const f = computeFeatures(s, now, this.sol.value, config.tracking.sniperWindowSec);
+        const f = computeFeatures(s, now, ctx);
         if (snapAge !== null) this.takeSnapshot(s, snapAge, f, now);
         if (!needsEval) continue;
 
@@ -212,13 +242,38 @@ export class SignalEngine extends EventEmitter {
     }
   }
 
+  /** Top holders + earliest buyers (dev excluded): the wallets that decide whether "unique buyers" is real. */
+  private walletSample(s: TokenState): string[] {
+    const n = config.wallets.sample;
+    const top = [...s.balances.entries()]
+      .filter(([w]) => w !== s.creator)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, Math.ceil(n / 2))
+      .map(([w]) => w);
+    const early = [...s.firstBuyAt.entries()]
+      .filter(([w]) => w !== s.creator)
+      .sort((a, b) => a[1] - b[1])
+      .map(([w]) => w);
+    const out = new Set(top);
+    for (const w of early) {
+      if (out.size >= n) break;
+      out.add(w);
+    }
+    return [...out];
+  }
+
   private async verify(s: TokenState): Promise<void> {
     const g = config.gates;
     this.stats.verified++;
     try {
-      if (s.metadata === undefined) s.metadata = await fetchMetadata(s.uri);
+      // Phase 1 — safety checks that can kill the token (run in parallel).
+      const [meta, oc, rc] = await Promise.all([
+        s.metadata === undefined ? fetchMetadata(s.uri) : Promise.resolve(s.metadata),
+        onchainCheck(s.mint, s.bondingCurveKey),
+        rugcheck(s.mint),
+      ]);
+      s.metadata = meta;
 
-      const oc = await onchainCheck(s.mint, s.bondingCurveKey);
       if (oc.ok) {
         if (oc.mintAuthority) return this.reject(s, 'mint authority not revoked');
         if (oc.freezeAuthority) return this.reject(s, 'freeze authority not revoked');
@@ -229,14 +284,32 @@ export class SignalEngine extends EventEmitter {
       } else if (g.requireOnchain) {
         return this.retryLater(s, `on-chain check failed: ${oc.error}`);
       }
-
-      const rc = await rugcheck(s.mint);
       if (rc.status === 'ok' && rc.dangers.length) return this.reject(s, `rugcheck: ${rc.dangers.join(', ')}`);
       if (rc.status !== 'ok' && g.requireRugcheck) return this.retryLater(s, `rugcheck ${rc.status}`);
 
+      // Phase 2 — enrichment, only for tokens that survived phase 1 (saves RPC credits and X budget).
+      const [wallets, orders, x] = await Promise.all([
+        config.wallets.enabled
+          ? analyzeWallets(s.mint, this.walletSample(s), s.creator, s.balances)
+          : Promise.resolve(null),
+        config.dexOrders.enabled ? dexOrders(s.mint, s.createdAt) : Promise.resolve(null),
+        xMentions(s.mint),
+      ]);
+
+      if (wallets?.ok) {
+        if (wallets.devFundedBuyers > g.maxDevFundedBuyers)
+          return this.reject(s, `${wallets.devFundedBuyers} buyers funded by the dev`);
+        if (wallets.freshPct > g.maxFreshWalletPct)
+          return this.retryLater(s, `fresh wallets ${wallets.freshPct.toFixed(0)}%`);
+        if (wallets.clusterHoldPct > g.maxClusterHoldPct)
+          return this.retryLater(s, `funding clusters hold ${wallets.clusterHoldPct.toFixed(1)}%`);
+      } else if (wallets) {
+        log.debug(`[engine] wallet analysis failed for $${s.symbol}: ${wallets.error}`);
+      }
+
       // The awaits above took time and trades kept coming: re-decide on fresh state.
       const now = Date.now();
-      const f = computeFeatures(s, now, this.sol.value, config.tracking.sniperWindowSec);
+      const f = computeFeatures(s, now, this.featureContext(now));
       const gate = checkGates(f);
       if (!gate.pass) {
         if (gate.permanent) return this.reject(s, gate.reason);
@@ -256,7 +329,11 @@ export class SignalEngine extends EventEmitter {
       if (!this.underHourlyCap(now)) return this.retryLater(s, 'hourly signal cap');
 
       this.countVerify('signal sent');
-      await this.emitSignal(s, f, score, oc.ok ? oc : null, rc, now);
+      await this.emitSignal(s, f, score, oc.ok ? oc : null, rc, now, {
+        wallets: wallets?.ok ? wallets : null,
+        dexOrders: orders?.ok ? orders : null,
+        x: x.ok ? x : null,
+      });
     } catch (e) {
       log.error(`[engine] verify ${s.symbol} failed`, e);
       this.retryLater(s, 'verify error');
@@ -270,6 +347,7 @@ export class SignalEngine extends EventEmitter {
     onchain: SignalRecord['onchain'],
     rc: SignalRecord['rugcheck'],
     now: number,
+    extra: Pick<SignalRecord, 'wallets' | 'dexOrders' | 'x'>,
   ): Promise<void> {
     const solUsd = this.sol.value!;
     s.status = 'signaled';
@@ -286,6 +364,7 @@ export class SignalEngine extends EventEmitter {
       onchain,
       rugcheck: rc,
       socials: s.metadata ?? null,
+      ...extra,
       entryMcapUsd: s.mcapSol * solUsd,
       solPriceAtSignal: solUsd,
       perf: newPerfState(),
@@ -421,6 +500,7 @@ export class SignalEngine extends EventEmitter {
 
   private drop(s: TokenState, reason: string): void {
     this.foldIntoFunnel(s);
+    this.creators.recordPeak(s.mint, s.peakMcapSol);
     if (config.dataset.enabled && s.snapshots.length) {
       appendJsonl(dailyFile('dataset'), {
         mint: s.mint,

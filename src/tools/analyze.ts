@@ -90,5 +90,55 @@ function datasetReport(): void {
   console.log('Small samples lie — wait for several thousand tokens per snapshot age before re-tuning.');
 }
 
+/** Numeric view of everything known at signal time, including verify-stage enrichments. */
+function signalVector(r: SignalRecord): Record<string, number> {
+  const out: Record<string, number> = {};
+  const add = (prefix: string, obj: object | null | undefined) => {
+    if (!obj) return;
+    for (const [k, v] of Object.entries(obj)) {
+      if (typeof v === 'number' && Number.isFinite(v)) out[prefix + k] = v;
+      else if (typeof v === 'boolean' && k !== 'ok' && k !== 'capped') out[prefix + k] = v ? 1 : 0;
+    }
+  };
+  add('', r.features);
+  add('wallet.', r.wallets);
+  add('dex.', r.dexOrders);
+  add('x.', r.x);
+  out.score = r.score;
+  return out;
+}
+
+/**
+ * Wallet forensics, DexScreener orders and X only exist for verified candidates,
+ * so they're judged on signals: split at each feature's median, compare plan returns.
+ */
+function signalFeatureReport(): void {
+  const rows = readJsonl<SignalRecord>(dataPath('signals.jsonl'));
+  console.log('\n══ Signal features — median split, plan return above vs below ══');
+  if (rows.length < 20) return console.log(`Need ≥20 finished signals (have ${rows.length}).`);
+  const vecs = rows.map((r) => ({ v: signalVector(r), ret: r.perf.sim.returnPct ?? 0, tp: r.perf.sim.exitReason === 'tp' }));
+  const keys = [...new Set(vecs.flatMap((x) => Object.keys(x.v)))];
+  const out: { k: string; line: string; gap: number }[] = [];
+  for (const k of keys) {
+    const have = vecs.filter((x) => k in x.v);
+    if (have.length < 20) continue;
+    const med = median(have.map((x) => x.v[k]));
+    const lo = have.filter((x) => x.v[k] <= med);
+    const hi = have.filter((x) => x.v[k] > med);
+    if (lo.length < 8 || hi.length < 8) continue; // mostly-constant feature
+    const avg = (xs: typeof have) => xs.reduce((a, x) => a + x.ret, 0) / xs.length;
+    const tpr = (xs: typeof have) => pct(xs.filter((x) => x.tp).length, xs.length);
+    const gap = avg(hi) - avg(lo);
+    out.push({
+      k,
+      gap,
+      line: `${pad(k, 26)} ≤${pad(med.toFixed(1), 8)} n=${pad(lo.length, 4)} avg ${pad(f1(avg(lo)) + '%', 8)} TP ${pad(f1(tpr(lo)) + '%', 7)}| above: n=${pad(hi.length, 4)} avg ${pad(f1(avg(hi)) + '%', 8)} TP ${f1(tpr(hi))}%`,
+    });
+  }
+  out.sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap)).slice(0, 25).forEach((o) => console.log(o.line));
+  console.log('Biggest gaps first. With small n these are hints, not conclusions — re-check every week.');
+}
+
 signalsReport();
+signalFeatureReport();
 datasetReport();

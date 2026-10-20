@@ -58,6 +58,27 @@ Every tracked token is also snapshotted at 60s, 180s and 300s. Each snapshot is 
 | Drawdown from peak | Don't signal something already dumping | ≤35% |
 | Mint/freeze authority, Token-2022 extensions | Can mint, freeze, block sells, or tax you | any ⇒ permanent reject |
 
+**Extra data (logged on every signal, gates off by default):**
+
+| Feature | Source | What it catches |
+|---|---|---|
+| Creator history: prior launches, launches in 24h, prior graduations, best prior peak | Every launch the bot sees, saved to `data/creators.json` | Serial launchers and rug farms; devs with a real track record. Gets better the longer the bot runs |
+| Fresh-wallet %, low-activity % | RPC: transaction history of ~20 top holders and earliest buyers | One actor posing as many "unique buyers" |
+| Funding clusters, cluster-held %, dev-funded buyers | RPC: who sent each of those wallets its first SOL (exchanges ignored) | Bundles, and devs buying their own token through side wallets |
+| Repeated trade sizes | Trade stream | Fixed-size volume bots |
+| Launches/min, graduations/1h, SOL 1h change | Trade stream + SOL price | Hot vs. dead market |
+| Paid DexScreener profile / boosts / ads / takeover | DexScreener orders endpoint | Money spent on promotion (commitment, or a planned pump) |
+| X posts mentioning the contract address, unique authors, median followers, new-account % | Official X API (optional, `X_BEARER_TOKEN`) | Attention arriving, filtered for bot accounts |
+
+Wallet forensics costs roughly 20–45 RPC calls per candidate (per-wallet results are cached for 6h, and repeat sniper wallets hit the cache). Watch your Helius usage; if your plan allows more requests per second, raise `RPC_RPS`. Set `WALLET_ANALYSIS=false` to turn it off.
+
+X only runs on candidates that passed every other check, at most one search every 5 seconds, capped per day. There are two sources:
+
+- **Official API** (`X_BEARER_TOKEN`): stable and allowed, billed per post read. Default cap 20 searches/day.
+- **Scraping** (`X_SCRAPE_API_KEY`, via [rettiwt-api](https://www.npmjs.com/package/rettiwt-api)): free, but it logs in as an X account, which is against X's terms. Use a **throwaway account**, never your personal one: the key is equivalent to that account's login, and X can limit or suspend it at any time. To get the key, log into the throwaway account in a browser and follow rettiwt-api's README to generate an `API_KEY`. Default cap 150 searches/day. After 3 failures in a row the bot pauses X lookups (15 min, doubling up to 6h) instead of hammering a flagged account, and `/status` shows the pause and the last error.
+
+After a week or two, `npm run analyze` splits finished signals at each feature's median and compares plan returns above vs. below. Promote a feature to a gate only if the gap holds up week after week: `MAX_FRESH_WALLET_PCT`, `MAX_CLUSTER_HOLD_PCT`, `MAX_DEV_FUNDED_BUYERS`, `MAX_CREATOR_LAUNCHES_24H`.
+
 **Score (0–100):** buyer velocity 25, net flow relative to market cap 20, SOL-weighted buy pressure 15, distribution 20, organic flow 10, socials 5, ticker originality 5. A token signals at ≥60. Tier A is ≥80 and tier B is ≥70. Every threshold is an env var (see `.env.example`).
 
 > **These weights and thresholds are priors, not fitted values.** Nobody can hand you edge in this market. What this gives you is features grounded in how pump.fun tokens actually rug and run, plus the measurement loop to tune them. Run the bot for a few days, then run `npm run analyze` and re-weight toward the features that show lift.

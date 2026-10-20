@@ -1,5 +1,6 @@
 import type { Features } from '../types.js';
 import type { TokenState } from '../state/tracker.js';
+import type { CreatorStats } from './creators.js';
 import { clamp, median, sum } from '../utils/math.js';
 
 /**
@@ -20,7 +21,29 @@ export function curveProgressPct(vTokens: number): number {
 
 const pct = (part: number, whole: number): number => (whole > 0 ? (part / whole) * 100 : 0);
 
-export function computeFeatures(s: TokenState, now: number, solUsd: number | null, sniperWindowSec: number): Features {
+/** Everything outside the token itself that features depend on. Built once per engine tick. */
+export interface FeatureContext {
+  solUsd: number | null;
+  sniperWindowSec: number;
+  creator: (creator: string, launchTs: number) => CreatorStats;
+  market: { launchesPerMin: number; graduations1h: number; solChange1hPct: number };
+}
+
+/** Buy sizes that repeat exactly (to 1e-6 SOL) ≥3 times among recent buys — scripted volume bots. */
+function repeatSizePct(sizes: number[]): number {
+  if (sizes.length < 5) return 0;
+  const counts = new Map<string, number>();
+  for (const x of sizes) {
+    const k = x.toFixed(6); // lamport-level: humans using the same preset still differ here, scripted bots don't
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  let rep = 0;
+  for (const c of counts.values()) if (c >= 3) rep += c;
+  return (rep / sizes.length) * 100;
+}
+
+export function computeFeatures(s: TokenState, now: number, ctx: FeatureContext): Features {
+  const { solUsd, sniperWindowSec } = ctx;
   const ageSec = (now - s.createdAt) / 1000;
   const w5 = now - 300_000;
   const w2 = now - 120_000;
@@ -84,6 +107,7 @@ export function computeFeatures(s: TokenState, now: number, solUsd: number | nul
   }
 
   const netFlow = buySol5m - sellSol5m;
+  const cr = ctx.creator(s.creator, s.createdAt);
   const uniqueBuyers = s.firstBuyAt.size - (s.firstBuyAt.has(s.creator) ? 1 : 0);
 
   return {
@@ -113,5 +137,14 @@ export function computeFeatures(s: TokenState, now: number, solUsd: number | nul
     washPct: pct(washVol, s.totalVolSol),
     drawdownPct: s.peakMcapSol > 0 ? clamp((1 - s.mcapSol / s.peakMcapSol) * 100, 0, 100) : 0,
     tickerDupes: s.tickerDupes,
+    repeatSizePct5m: repeatSizePct(buySizes),
+    creatorPriorLaunches: cr.priorLaunches,
+    creatorLaunches24h: cr.launches24h,
+    creatorPriorGraduated: cr.priorGraduated,
+    creatorBestPriorPeakSol: cr.bestPriorPeakSol,
+    creatorMinSinceLast: cr.minSinceLast,
+    launchesPerMin: ctx.market.launchesPerMin,
+    graduations1h: ctx.market.graduations1h,
+    solChange1hPct: ctx.market.solChange1hPct,
   };
 }

@@ -69,6 +69,59 @@ export interface Features {
   washPct: number;
   drawdownPct: number;
   tickerDupes: number;
+  /** % of 5m buys whose exact size repeats ≥3 times (volume-bot signature). */
+  repeatSizePct5m: number;
+
+  // Creator history (from launches this bot has seen; grows over time)
+  creatorPriorLaunches: number;
+  creatorLaunches24h: number;
+  creatorPriorGraduated: number;
+  creatorBestPriorPeakSol: number;
+  /** Minutes since the creator's previous launch; -1 if none seen. */
+  creatorMinSinceLast: number;
+
+  // Market conditions
+  launchesPerMin: number;
+  graduations1h: number;
+  solChange1hPct: number;
+}
+
+/** Early-buyer forensics, computed at verify time on a sample of top holders + earliest buyers. */
+export interface WalletAnalysis {
+  ok: boolean;
+  error?: string;
+  sampled: number;
+  /** Wallets whose full history fits in the fetch window and started < FRESH_WALLET_HOURS ago. */
+  freshPct: number;
+  /** Wallets with fewer than 10 transactions ever. */
+  lowActivityPct: number;
+  /** Groups of ≥2 sampled wallets funded by the same (non-exchange) wallet. */
+  clusters: number;
+  largestCluster: number;
+  clusterWallets: number;
+  clusterHoldPct: number;
+  /** Sampled buyers funded directly by the token's creator. */
+  devFundedBuyers: number;
+}
+
+export interface DexOrders {
+  ok: boolean;
+  paidProfile: boolean;
+  communityTakeover: boolean;
+  ads: number;
+  boosts: number;
+  /** Minutes from launch to the first paid order; -1 if none. */
+  minToFirstPaid: number;
+}
+
+export interface XMentions {
+  ok: boolean;
+  skipped?: string;
+  posts: number;
+  capped: boolean;
+  authors: number;
+  medianFollowers: number;
+  newAccountPct: number;
 }
 
 export interface TokenMetadata {
@@ -142,6 +195,9 @@ export interface SignalRecord {
   onchain: OnchainCheck | null;
   rugcheck: RugcheckResult;
   socials: TokenMetadata | null;
+  wallets?: WalletAnalysis | null;
+  dexOrders?: DexOrders | null;
+  x?: XMentions | null;
   entryMcapUsd: number;
   solPriceAtSignal: number;
   messageId?: string;
