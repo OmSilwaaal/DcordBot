@@ -50,6 +50,8 @@ export const config = {
     })(),
     /** Solana websocket for the chain trade stream. ~40 MB/min, so a metered RPC plan can run out fast. */
     solanaWsUrl: str('SOLANA_WS_URL', 'wss://api.mainnet-beta.solana.com'),
+    /** Overlapping sockets for the chain stream; the public endpoint drops each one every ~30s. */
+    solanaWsConnections: num('SOLANA_WS_CONNECTIONS', 3),
     /** Use a real provider (Helius/QuickNode/Triton). The public endpoint often rejects getTokenLargestAccounts. */
     rpcUrl: str('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com'),
     rpcRps: num('RPC_RPS', 4),

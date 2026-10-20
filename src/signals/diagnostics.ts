@@ -64,7 +64,7 @@ export async function runDiagnostics(
     name: 'Trade stream',
     ok: chain && !chain.connected ? false : starved ? false : trades > 0 ? true : null,
     detail: chain
-      ? `Solana logs · ${chain.connected ? `connected · last message ${ago(now - chain.lastMessageAt)}` : 'DISCONNECTED — reconnecting'}` +
+      ? `Solana logs · ${chain.connected ? `${chain.connectedCount} sockets up · last message ${ago(now - chain.lastMessageAt)}` : 'DISCONNECTED — reconnecting'}` +
         ` · ${chain.tradesSeen} pump.fun trades decoded · ${trades} on tracked tokens`
       : starved
         ? '0 trades — PumpPortal trade data needs a funded API key in PUMPPORTAL_WS, or set TRADE_SOURCE=chain'

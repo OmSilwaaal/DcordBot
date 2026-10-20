@@ -22,7 +22,7 @@ async function main(): Promise<void> {
   const discord = new DiscordNotifier(perf);
   await discord.start();
 
-  const chain = config.feeds.tradeSource === 'chain' ? new PumpChainFeed(config.feeds.solanaWsUrl) : null;
+  const chain = config.feeds.tradeSource === 'chain' ? new PumpChainFeed(config.feeds.solanaWsUrl, config.feeds.solanaWsConnections) : null;
   log.info(`[feed] trades from ${chain ? 'Solana (pump.fun program logs)' : 'PumpPortal'}`);
   const feed = new PumpPortalFeed(config.feeds.pumpPortalWs, config.feeds.allowedPools, chain);
   const engine = new SignalEngine(feed, sol, perf, discord);

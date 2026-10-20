@@ -14,6 +14,10 @@ import type { TradeEvent } from '../types.js';
  *
  * The stream is heavy (~40 MB/min, mostly failed bot transactions), so failed ones are
  * dropped before JSON parsing. Emits: 'trade' (TradeEvent).
+ *
+ * The public endpoint drops long subscriptions every ~30s. Several staggered sockets
+ * run at once and transactions are de-duplicated by signature, so a drop on one socket
+ * loses nothing while another is still streaming.
  */
 
 const PUMP_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
@@ -24,6 +28,9 @@ const CREATE_EVENT = disc('CreateEvent');
 
 /** Trades for mints the engine hasn't subscribed to yet are kept this long, then replayed on subscribe. */
 const BUFFER_MS = 30_000;
+/** Signatures already handled, kept long enough to cover the slowest socket's lag. */
+const SEEN_MS = 60_000;
+const SIGNATURE = /"signature":"([1-9A-HJ-NP-Za-km-z]+)"/;
 
 const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
 function base58(b: Buffer): string {
@@ -90,21 +97,43 @@ function decodeCreateMint(b: Buffer): string | null {
   return o + 32 <= b.length ? base58(b.subarray(o, o + 32)) : null;
 }
 
+interface Socket {
+  id: number;
+  ws: WebSocket | null;
+  connected: boolean;
+  lastMessageAt: number;
+  reconnectDelay: number;
+}
+
 export class PumpChainFeed extends EventEmitter {
-  connected = false;
-  lastMessageAt = 0;
   /** Decoded trades across all of pump.fun, subscribed or not — proves the stream is alive. */
   tradesSeen = 0;
+  reconnects = 0;
 
-  private ws: WebSocket | null = null;
+  private sockets: Socket[] = [];
   private subscribed = new Set<string>();
   private books = new Map<string, MintBook>();
-  private watchdog: NodeJS.Timeout | null = null;
-  private reconnectDelay = 1000;
+  private seen = new Map<string, number>();
+  private timers: NodeJS.Timeout[] = [];
   private stopped = false;
 
-  constructor(private readonly url: string) {
+  constructor(
+    private readonly url: string,
+    private readonly connections = 3,
+  ) {
     super();
+  }
+
+  get connected(): boolean {
+    return this.sockets.some((s) => s.connected);
+  }
+
+  get connectedCount(): number {
+    return this.sockets.filter((s) => s.connected).length;
+  }
+
+  get lastMessageAt(): number {
+    return Math.max(0, ...this.sockets.map((s) => s.lastMessageAt));
   }
 
   get subscriptionCount(): number {
@@ -112,23 +141,37 @@ export class PumpChainFeed extends EventEmitter {
   }
 
   start(): void {
-    this.connect();
-    this.watchdog = setInterval(() => {
-      const now = Date.now();
-      if (this.ws && this.connected && now - this.lastMessageAt > 30_000) {
-        log.warn('[chain] silent for 30s, forcing reconnect');
-        this.ws.terminate();
-      }
-      for (const [mint, book] of this.books) {
-        if (!this.subscribed.has(mint) && now - book.lastSeen > BUFFER_MS) this.books.delete(mint);
-      }
-    }, 10_000);
+    const n = Math.max(1, this.connections);
+    for (let i = 0; i < n; i++) {
+      const sock: Socket = { id: i + 1, ws: null, connected: false, lastMessageAt: 0, reconnectDelay: 1000 };
+      this.sockets.push(sock);
+      // Staggered so the public endpoint's ~30s drops don't line up across sockets.
+      this.timers.push(setTimeout(() => this.connect(sock), (i * 30_000) / n));
+    }
+    this.timers.push(
+      setInterval(() => {
+        const now = Date.now();
+        for (const sock of this.sockets) {
+          if (sock.ws && sock.connected && now - sock.lastMessageAt > 30_000) {
+            log.warn(`[chain#${sock.id}] silent for 30s, forcing reconnect`);
+            sock.ws.terminate();
+          }
+        }
+        for (const [mint, book] of this.books) {
+          if (!this.subscribed.has(mint) && now - book.lastSeen > BUFFER_MS) this.books.delete(mint);
+        }
+        for (const [sig, at] of this.seen) {
+          if (now - at <= SEEN_MS) break; // insertion order = time order
+          this.seen.delete(sig);
+        }
+      }, 10_000),
+    );
   }
 
   stop(): void {
     this.stopped = true;
-    if (this.watchdog) clearInterval(this.watchdog);
-    this.ws?.close();
+    for (const t of this.timers) clearTimeout(t);
+    for (const sock of this.sockets) sock.ws?.close();
   }
 
   subscribeTrades(mints: string[]): void {
@@ -150,15 +193,16 @@ export class PumpChainFeed extends EventEmitter {
     }
   }
 
-  private connect(): void {
+  private connect(sock: Socket): void {
+    if (this.stopped) return;
     const ws = new WebSocket(this.url);
-    this.ws = ws;
+    sock.ws = ws;
 
     ws.on('open', () => {
-      this.connected = true;
-      this.reconnectDelay = 1000;
-      this.lastMessageAt = Date.now();
-      log.info(`[chain] connected to ${this.url.replace(/api[-_]key=[^&]+/i, 'api-key=***')}`);
+      sock.connected = true;
+      sock.reconnectDelay = 1000;
+      sock.lastMessageAt = Date.now();
+      log.info(`[chain#${sock.id}] connected to ${this.url.replace(/api[-_]key=[^&]+/i, 'api-key=***')}`);
       ws.send(
         JSON.stringify({
           jsonrpc: '2.0',
@@ -170,26 +214,37 @@ export class PumpChainFeed extends EventEmitter {
     });
 
     ws.on('message', (raw: Buffer) => {
-      this.lastMessageAt = Date.now();
+      const now = Date.now();
+      sock.lastMessageAt = now;
       const text = raw.toString();
       // Most pump.fun transactions are failed bot spam; skip them before paying for JSON.parse.
       if (!text.includes('"err":null')) {
-        if (text.includes('"error"')) log.warn(`[chain] RPC error: ${text.slice(0, 200)}`);
+        if (text.includes('"error"')) log.warn(`[chain#${sock.id}] RPC error: ${text.slice(0, 200)}`);
         return;
+      }
+      // Every socket sees the same transactions: whichever delivers first wins.
+      const sig = SIGNATURE.exec(text)?.[1];
+      if (sig) {
+        if (this.seen.has(sig)) return;
+        this.seen.set(sig, now);
       }
       this.handle(text);
     });
 
     ws.on('close', () => {
-      this.connected = false;
+      sock.connected = false;
       if (this.stopped) return;
-      const delay = this.reconnectDelay;
-      this.reconnectDelay = Math.min(delay * 2, 30_000);
-      log.warn(`[chain] disconnected, reconnecting in ${delay}ms`);
-      setTimeout(() => this.connect(), delay);
+      this.reconnects++;
+      const delay = sock.reconnectDelay;
+      sock.reconnectDelay = Math.min(delay * 2, 30_000);
+      // The public endpoint's routine drops are expected; only log when the other sockets are down too.
+      if (!this.connected) log.warn(`[chain] all sockets down, reconnecting in ${delay}ms`);
+      setTimeout(() => this.connect(sock), delay);
     });
 
-    ws.on('error', (e) => log.warn('[chain] socket error', e));
+    ws.on('error', (e) => {
+      if (!/1006/.test(String(e))) log.warn(`[chain#${sock.id}] socket error`, e);
+    });
   }
 
   private handle(text: string): void {
