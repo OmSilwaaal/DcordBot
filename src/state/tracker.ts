@@ -60,6 +60,13 @@ export class TokenState {
   status: TokenStatus = 'watching';
   rejectReason: string | null = null;
   waitReason: string | null = null;
+  /** Last reason the verify stage held this token back (on-chain, RugCheck, cap…). */
+  verifyNote: string | null = null;
+  /** Funnel accounting: fewest gates this token ever failed at once, which ones, and best score once through. */
+  bestFailCount = Infinity;
+  bestFailKeys: string[] = [];
+  bestScore = 0;
+  reachedVerify = false;
   nextVerifyAt = 0;
   verifyFailures = 0;
   graduated = false;

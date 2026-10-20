@@ -13,7 +13,17 @@ import type { PerformanceTracker } from '../signals/performance.js';
 import type { SignalRecord } from '../types.js';
 import { log } from '../utils/logger.js';
 import type { DiagReport } from '../signals/diagnostics.js';
-import { clean, filtersEmbed, resultLine, signalEmbed, statsEmbed, statusEmbed, testSignalEmbed } from './format.js';
+import type { SignalEngine } from '../signals/engine.js';
+import {
+  clean,
+  filtersEmbed,
+  funnelEmbed,
+  resultLine,
+  signalEmbed,
+  statsEmbed,
+  statusEmbed,
+  testSignalEmbed,
+} from './format.js';
 
 const COMMANDS = [
   new SlashCommandBuilder()
@@ -23,6 +33,7 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('recent').setDescription('Last 10 signals and how they did'),
   new SlashCommandBuilder().setName('filters').setDescription('Current filter thresholds and trade plan'),
   new SlashCommandBuilder().setName('status').setDescription('Live self-test: feed, RPC, APIs, storage, closest candidates'),
+  new SlashCommandBuilder().setName('funnel').setDescription('Where tokens are getting filtered out, and which gate blocks the most'),
   new SlashCommandBuilder().setName('test').setDescription('Post a clearly-labelled fake signal to the signals channel'),
 ].map((c) => c.toJSON());
 
@@ -30,6 +41,7 @@ export class DiscordNotifier implements Notifier {
   readonly client = new Client({ intents: [GatewayIntentBits.Guilds] });
   private channel: SendableChannels | null = null;
   private diagnostics: (() => Promise<DiagReport>) | null = null;
+  private engine: SignalEngine | null = null;
 
   constructor(private readonly perf: PerformanceTracker) {}
 
@@ -83,8 +95,9 @@ export class DiscordNotifier implements Notifier {
   }
 
   /** Wired up in index.ts once the engine exists. */
-  setDiagnostics(fn: () => Promise<DiagReport>): void {
+  setDiagnostics(fn: () => Promise<DiagReport>, engine: SignalEngine): void {
     this.diagnostics = fn;
+    this.engine = engine;
   }
 
   async stop(): Promise<void> {
@@ -145,6 +158,12 @@ export class DiscordNotifier implements Notifier {
         }
         await i.deferReply(); // live checks can take ~10s; Discord needs an ack within 3s
         await i.editReply({ embeds: [statusEmbed(await this.diagnostics())] });
+      } else if (i.commandName === 'funnel') {
+        if (!this.engine) {
+          await i.reply({ content: 'Still starting up — try again in a few seconds.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        await i.reply({ embeds: [funnelEmbed(this.engine.funnelReport())] });
       } else if (i.commandName === 'test') {
         if (!this.channel) {
           await i.reply({ content: 'Signals channel not ready.', flags: MessageFlags.Ephemeral });

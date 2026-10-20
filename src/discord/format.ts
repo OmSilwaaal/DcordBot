@@ -1,7 +1,9 @@
 import { EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
 import type { SignalRecord } from '../types.js';
+import { GATE_BY_KEY } from '../analysis/gates.js';
 import type { DiagReport } from '../signals/diagnostics.js';
+import type { SignalEngine } from '../signals/engine.js';
 import { newPerfState, type Summary } from '../signals/performance.js';
 
 const COLORS = { A: 0x22c55e, B: 0xeab308, C: 0x3b82f6 } as const;
@@ -212,4 +214,29 @@ export function testSignalEmbed(): EmbedBuilder {
     .setURL(null)
     .setColor(0x9ca3af)
     .setFooter({ text: 'Posted by /test to verify the bot can post here. Real signals look like this.' });
+}
+
+export function funnelEmbed(r: ReturnType<SignalEngine['funnelReport']>): EmbedBuilder {
+  const g = config.gates;
+  const label = (k: string) => GATE_BY_KEY.get(k)?.label(g) ?? k;
+  const lines = (rows: [string, number][], fmt: (k: string) => string, n = 8) =>
+    rows.slice(0, n).map(([k, v]) => `\`${String(v).padStart(4)}\` ${fmt(k)}`).join('\n') || '–';
+  const pctOf = (a: number, b: number) => (b ? ` (${((a / b) * 100).toFixed(1)}%)` : '');
+
+  return new EmbedBuilder()
+    .setColor(0x6366f1)
+    .setTitle(`🔎 Signal funnel — last ${r.sinceMin < 120 ? `${r.sinceMin.toFixed(0)}m` : `${(r.sinceMin / 60).toFixed(1)}h`}`)
+    .setDescription(
+      `Launches seen **${r.launches}** → reached ${g.minAgeSec}s **${r.matured}** → passed every gate **${r.passedGates}**${pctOf(r.passedGates, r.matured)}\n` +
+        `→ blocked by score **${r.scoreBlocked}** → sent to verify **${r.verified}** → **signals ${r.signals}**`,
+    )
+    .addFields(
+      {
+        name: '🚧 Near misses — tokens stopped by exactly ONE gate',
+        value: lines(r.nearMiss, label) + '\n_The top line is the gate costing you the most signals._',
+      },
+      { name: '🛡️ Verify stage outcomes', value: lines(r.verifyOutcomes, (k) => k) },
+      { name: '⛔ Permanent rejections', value: lines(r.permanentRejects, (k) => k, 6) },
+    )
+    .setFooter({ text: 'Counts reset on redeploy. Loosen one gate at a time via Railway variables, then compare.' });
 }

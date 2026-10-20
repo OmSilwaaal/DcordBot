@@ -104,6 +104,7 @@ Expected cost on the Hobby plan: roughly 200–400 MB of RAM and a fraction of a
 - `/recent`: the last 10 signals with live or final results.
 - `/filters`: the active thresholds and trade plan.
 - `/status`: live self-test. It checks the PumpPortal feed, launch flow, SOL price, the Solana RPC holder check (run on a real token the bot is tracking), RugCheck, DexScreener and storage, then lists the 5 tokens closest to signaling and what each is waiting on.
+- `/funnel`: where tokens get filtered out since boot. It shows launches → matured → passed every gate → verify → signals, the **near misses** (tokens blocked by exactly one gate, which tells you which gate to loosen), verify-stage outcomes, and permanent rejections.
 - `/test`: posts a clearly-labelled fake signal to the signals channel, to confirm permissions and see what alerts look like.
 
 On every boot the bot also posts "🟢 Memecoin radar online" to the channel. Set `STARTUP_MESSAGE=false` to turn that off.

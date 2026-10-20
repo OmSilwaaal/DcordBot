@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { config } from '../config.js';
 import { computeFeatures } from '../analysis/features.js';
-import { checkGates } from '../analysis/gates.js';
+import { checkGates, failingGates } from '../analysis/gates.js';
 import { fetchMetadata } from '../analysis/metadata.js';
 import { onchainCheck } from '../analysis/onchain.js';
 import { rugcheck } from '../analysis/rugcheck.js';
@@ -33,6 +33,15 @@ export class SignalEngine extends EventEmitter {
   readonly stats = { created: 0, trades: 0, evaluated: 0, verified: 0, signals: 0, rejected: 0, dropped: 0 };
 
   readonly startedAt = Date.now();
+  /** Since boot: tokens that reached min age, how close each got, and where the verify stage stopped them. */
+  readonly funnel = {
+    matured: 0,
+    passedGates: 0,
+    scoreBlocked: 0,
+    nearMiss: new Map<string, number>(), // gate key → tokens whose ONLY failing gate was this one
+    verifyOutcomes: new Map<string, number>(),
+    permanentRejects: new Map<string, number>(),
+  };
   /** Launch timestamps from the last 5 minutes (for /status). */
   private recentCreates: number[] = [];
   private ticking = false;
@@ -98,7 +107,15 @@ export class SignalEngine extends EventEmitter {
       const gate = checkGates(f);
       const score = computeScore(f, s.metadata ?? null).total;
       const reason =
-        s.status === 'verifying' ? 'verifying now' : gate.pass ? (s.waitReason ?? 'passes gates') : gate.reason;
+        s.status === 'verifying'
+          ? 'verifying now'
+          : !gate.pass
+            ? gate.reason
+            : score < config.scoring.minScore
+              ? `score ${score} < ${config.scoring.minScore}`
+              : s.verifyNote
+                ? `held at verify: ${s.verifyNote}`
+                : 'passes — queued for verify';
       rows.push({ symbol: s.symbol, mint: s.mint, score, f, reason });
     }
     return rows.sort((a, b) => b.score - a.score).slice(0, n);
@@ -157,6 +174,14 @@ export class SignalEngine extends EventEmitter {
         s.lastEvalAt = now;
         this.stats.evaluated++;
 
+        if (f.ageSec >= config.gates.minAgeSec) {
+          const fails = failingGates(f);
+          if (fails.length < s.bestFailCount) {
+            s.bestFailCount = fails.length;
+            s.bestFailKeys = fails;
+          }
+        }
+
         const gate = checkGates(f);
         if (!gate.pass) {
           if (gate.permanent) this.reject(s, gate.reason);
@@ -165,6 +190,7 @@ export class SignalEngine extends EventEmitter {
         }
 
         const score = computeScore(f, s.metadata ?? null);
+        if (score.total > s.bestScore) s.bestScore = score.total;
         const slack = s.metadata === undefined ? SOCIAL_MAX : 0; // socials not fetched yet
         if (score.total + slack < config.scoring.minScore) {
           s.waitReason = `score ${score.total} < ${config.scoring.minScore}`;
@@ -176,6 +202,8 @@ export class SignalEngine extends EventEmitter {
           continue;
         }
         s.status = 'verifying';
+        s.waitReason = null;
+        s.reachedVerify = true;
         this.verifying.add(s.mint);
         void this.verify(s).finally(() => this.verifying.delete(s.mint));
       }
@@ -212,12 +240,14 @@ export class SignalEngine extends EventEmitter {
       const gate = checkGates(f);
       if (!gate.pass) {
         if (gate.permanent) return this.reject(s, gate.reason);
+        this.countVerify(`moved during verify: ${gate.reason}`);
         s.status = 'watching';
         s.waitReason = gate.reason;
         return;
       }
       const score = computeScore(f, s.metadata ?? null);
       if (score.total < config.scoring.minScore) {
+        this.countVerify(`score below ${config.scoring.minScore} after socials/verify`);
         s.status = 'watching';
         s.waitReason = `score ${score.total} after verify`;
         return;
@@ -225,6 +255,7 @@ export class SignalEngine extends EventEmitter {
       if (!this.sol.value) return this.retryLater(s, 'no SOL price yet');
       if (!this.underHourlyCap(now)) return this.retryLater(s, 'hourly signal cap');
 
+      this.countVerify('signal sent');
       await this.emitSignal(s, f, score, oc.ok ? oc : null, rc, now);
     } catch (e) {
       log.error(`[engine] verify ${s.symbol} failed`, e);
@@ -275,7 +306,22 @@ export class SignalEngine extends EventEmitter {
     }
   }
 
+  /** "on-chain top10 41.3%" → "on-chain top10 #%" so reasons aggregate. */
+  private static category(reason: string): string {
+    return reason.replace(/-?\d+(\.\d+)?/g, '#').slice(0, 80);
+  }
+
+  private bump(map: Map<string, number>, key: string): void {
+    map.set(key, (map.get(key) ?? 0) + 1);
+  }
+
+  private countVerify(reason: string): void {
+    this.bump(this.funnel.verifyOutcomes, SignalEngine.category(reason));
+  }
+
   private reject(s: TokenState, reason: string): void {
+    this.bump(this.funnel.permanentRejects, SignalEngine.category(reason));
+    if (s.status === 'verifying') this.countVerify(`rejected: ${reason}`);
     s.status = 'rejected';
     s.rejectReason = reason;
     this.stats.rejected++;
@@ -283,8 +329,9 @@ export class SignalEngine extends EventEmitter {
   }
 
   private retryLater(s: TokenState, reason: string): void {
+    this.countVerify(`held: ${reason}`);
     s.status = 'watching';
-    s.waitReason = reason;
+    s.verifyNote = reason;
     s.verifyFailures++;
     s.nextVerifyAt = Date.now() + Math.min(60_000, 5_000 * 2 ** (s.verifyFailures - 1));
     log.debug(`[engine] … $${s.symbol} ${reason}`);
@@ -342,7 +389,38 @@ export class SignalEngine extends EventEmitter {
     this.tracker.pruneTickerLog(now);
   }
 
+  private foldIntoFunnel(s: TokenState, into = this.funnel): void {
+    if (s.bestFailCount === Infinity) return; // never reached min age
+    into.matured++;
+    if (s.bestFailCount === 0) {
+      into.passedGates++;
+      if (!s.reachedVerify) into.scoreBlocked++;
+    } else if (s.bestFailCount === 1) {
+      this.bump(into.nearMiss, s.bestFailKeys[0]);
+    }
+  }
+
+  /** Funnel since boot, including tokens still being tracked. */
+  funnelReport() {
+    const f = this.funnel;
+    const live = { matured: 0, passedGates: 0, scoreBlocked: 0, nearMiss: new Map(f.nearMiss), verifyOutcomes: f.verifyOutcomes, permanentRejects: f.permanentRejects };
+    for (const s of this.tracker.tokens.values()) this.foldIntoFunnel(s, live);
+    return {
+      sinceMin: (Date.now() - this.startedAt) / 60_000,
+      launches: this.stats.created,
+      matured: f.matured + live.matured,
+      passedGates: f.passedGates + live.passedGates,
+      scoreBlocked: f.scoreBlocked + live.scoreBlocked,
+      verified: this.stats.verified,
+      signals: this.stats.signals,
+      nearMiss: [...live.nearMiss.entries()].sort((a, b) => b[1] - a[1]),
+      verifyOutcomes: [...f.verifyOutcomes.entries()].sort((a, b) => b[1] - a[1]),
+      permanentRejects: [...f.permanentRejects.entries()].sort((a, b) => b[1] - a[1]),
+    };
+  }
+
   private drop(s: TokenState, reason: string): void {
+    this.foldIntoFunnel(s);
     if (config.dataset.enabled && s.snapshots.length) {
       appendJsonl(dailyFile('dataset'), {
         mint: s.mint,

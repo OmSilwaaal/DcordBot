@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const feed = new PumpPortalFeed(config.feeds.pumpPortalWs, config.feeds.allowedPools);
   const engine = new SignalEngine(feed, sol, perf, discord);
   perf.on('finalized', (r) => void discord.updateSignal(r));
-  discord.setDiagnostics(() => runDiagnostics(engine, feed, sol, perf));
+  discord.setDiagnostics(() => runDiagnostics(engine, feed, sol, perf), engine);
   engine.start();
   feed.start();
 
