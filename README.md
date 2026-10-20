@@ -8,7 +8,8 @@ Real-time pump.fun signal generator for Discord. It is a rewrite of [MbotixTech/
 
 ```
 PumpPortal WS ──create──► track token, subscribe to its trades
-              ──trade───► update holders / flow / dev / snipers (every trade)
+Solana logs   ──trade───► update holders / flow / dev / snipers (every trade)
+(or PumpPortal, with a funded API key)
                            │
       every 2s ────────────┤ features → hard gates → score
                            │   (fail = "not yet", re-checked next trade,
@@ -21,6 +22,13 @@ PumpPortal WS ──create──► track token, subscribe to its trades
                            ▼
            forward test 60m → edit alert with result → signals.jsonl
 ```
+
+### Where trades come from
+
+PumpPortal only streams trades to connections with an API key funded with at least 0.02 SOL. Launches and migrations are still free there, so the bot always takes those from PumpPortal. Trades come from one of two places:
+
+- **`chain` (default):** the bot subscribes to the pump.fun program's logs on a Solana websocket (`SOLANA_WS_URL`, default the free public endpoint) and decodes each `TradeEvent` itself. Holder balances are counted from every trade since launch, because the on-chain event doesn't include them. The stream is about 40 MB/min, mostly failed bot transactions, so a metered RPC plan (including Helius free) can run out of credits fast. Keep `SOLANA_RPC_URL` on Helius for the holder checks and leave this on the public endpoint unless it proves unreliable.
+- **`pumpportal`:** set `PUMPPORTAL_WS=wss://pumpportal.fun/api/data?api-key=YOUR_KEY` with a funded key. The bot switches to it automatically when the URL has an API key, or force either with `TRADE_SOURCE`.
 
 Every tracked token is also snapshotted at 60s, 180s and 300s. Each snapshot is labelled with what happened next and written to `data/dataset-*.jsonl`. `npm run analyze` reads these files to show which features actually predict outcomes.
 
@@ -113,7 +121,7 @@ The repo is Railway-ready: `railway.json` builds from the Dockerfile, health-che
 4. Under **Variables**, add everything from `.env.example` you want to change, plus:
    - `DISCORD_TOKEN`, `DISCORD_CHANNEL_ID`, `DISCORD_GUILD_ID`, `SOLANA_RPC_URL` (required)
    - `RAILWAY_RUN_UID=0` (required: Railway mounts volumes as root, and the image runs as a non-root user)
-5. Deploy and watch the logs for the `[status]` line every 60s. `ws=up` and a climbing `created=` count mean the feed is live.
+5. Deploy and watch the logs for the `[status]` line every 60s. `ws=up` and a climbing `created=` count mean launches are arriving. Then run `/status` in Discord: the **Trade stream** line must show trades on tracked tokens, or nothing can ever signal.
 
 Keep it at **1 replica**. Two instances would double-post every signal, and PumpPortal asks for one connection per client.
 
@@ -124,7 +132,7 @@ Expected cost on the Hobby plan: roughly 200–400 MB of RAM and a fraction of a
 - `/stats [hours]`: plan hit rates (TP / SL / time), average and median return after slippage and costs, peak distribution, and results by tier.
 - `/recent`: the last 10 signals with live or final results.
 - `/filters`: the active thresholds and trade plan.
-- `/status`: live self-test. It checks the PumpPortal feed, launch flow, SOL price, the Solana RPC holder check (run on a real token the bot is tracking), RugCheck, DexScreener and storage, then lists the 5 tokens closest to signaling and what each is waiting on.
+- `/status`: live self-test. It checks the PumpPortal feed, launch flow, the trade stream, SOL price, the Solana RPC holder check (run on a real token the bot is tracking), RugCheck, DexScreener and storage, then lists the 5 tokens closest to signaling and what each is waiting on.
 - `/funnel`: where tokens get filtered out since boot. It shows launches → matured → passed every gate → verify → signals, the **near misses** (tokens blocked by exactly one gate, which tells you which gate to loosen), verify-stage outcomes, and permanent rejections.
 - `/test`: posts a clearly-labelled fake signal to the signals channel, to confirm permissions and see what alerts look like.
 
@@ -147,5 +155,6 @@ When a signal's 60-minute window ends, the bot edits the original alert in place
 - **Peak multiples are not returns.** `/stats` reports the plan's return separately for this reason.
 - **Base rate.** The overwhelming majority of pump.fun launches never graduate. Gates shrink that pool; they don't remove the risk.
 - **PumpPortal.** It's a third-party feed and asks for a single connection per client. If they change their schema, update `feeds/pumpportal.ts`.
+- **Chain trade decoding.** `feeds/pumpChain.ts` decodes pump.fun's `TradeEvent` layout directly. If pump.fun changes that event, trades stop decoding and `/status` shows 0 trades on tracked tokens. Balances counted from trades miss plain token transfers between wallets; the on-chain holder check at verify time is the source of truth.
 
 MIT licensed. Not financial advice.

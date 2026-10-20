@@ -56,6 +56,21 @@ export async function runDiagnostics(
     detail: `${launches} new pump.fun tokens in the last 5m · tracking ${engine.tracker.size}`,
   });
 
+  // Launches without trades means every token looks dead and nothing can ever signal.
+  const chain = feed.tradeSource;
+  const trades = engine.stats.trades;
+  const starved = trades === 0 && launches > 0 && now - engine.startedAt > 120_000;
+  checks.push({
+    name: 'Trade stream',
+    ok: chain && !chain.connected ? false : starved ? false : trades > 0 ? true : null,
+    detail: chain
+      ? `Solana logs · ${chain.connected ? `connected · last message ${ago(now - chain.lastMessageAt)}` : 'DISCONNECTED — reconnecting'}` +
+        ` · ${chain.tradesSeen} pump.fun trades decoded · ${trades} on tracked tokens`
+      : starved
+        ? '0 trades — PumpPortal trade data needs a funded API key in PUMPPORTAL_WS, or set TRADE_SOURCE=chain'
+        : `PumpPortal · ${trades} trades on tracked tokens`,
+  });
+
   // 2. SOL price
   checks.push({
     name: 'SOL price',

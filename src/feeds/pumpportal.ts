@@ -3,6 +3,7 @@ import WebSocket from 'ws';
 import { log } from '../utils/logger.js';
 import { chunks, num } from '../utils/math.js';
 import type { CreateEvent, MigrateEvent, TradeEvent } from '../types.js';
+import type { PumpChainFeed } from './pumpChain.js';
 
 /**
  * Single PumpPortal websocket (they ask for one connection per client).
@@ -10,6 +11,9 @@ import type { CreateEvent, MigrateEvent, TradeEvent } from '../types.js';
  *
  * Subscriptions are batched every 250ms and fully replayed on reconnect, so a
  * dropped socket doesn't silently stop the trade stream for tracked tokens.
+ *
+ * Trade subscriptions need a funded PumpPortal API key. Without one, pass a
+ * PumpChainFeed: launches and migrations still come from here, trades from the chain.
  */
 export class PumpPortalFeed extends EventEmitter {
   connected = false;
@@ -26,16 +30,26 @@ export class PumpPortalFeed extends EventEmitter {
   private stopped = false;
   /** PumpPortal sends token amounts in UI units; if they ever arrive raw (6 decimals) we rescale. */
   private tokenScale: number | null = null;
+  private notices = new Set<string>();
 
-  constructor(private readonly url: string, private readonly allowedPools: string[]) {
+  constructor(
+    private readonly url: string,
+    private readonly allowedPools: string[],
+    readonly tradeSource: PumpChainFeed | null = null,
+  ) {
     super();
   }
 
   get subscriptionCount(): number {
+    if (this.tradeSource) return this.tradeSource.subscriptionCount;
     return this.subscribed.size + this.pendingSub.size;
   }
 
   start(): void {
+    if (this.tradeSource) {
+      this.tradeSource.on('trade', (e: TradeEvent) => this.emit('trade', e));
+      this.tradeSource.start();
+    }
     this.connect();
     this.watchdog = setInterval(() => {
       if (this.ws && this.connected && Date.now() - this.lastMessageAt > 60_000) {
@@ -50,9 +64,11 @@ export class PumpPortalFeed extends EventEmitter {
     if (this.watchdog) clearInterval(this.watchdog);
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.ws?.close();
+    this.tradeSource?.stop();
   }
 
   subscribeTrades(mints: string[]): void {
+    if (this.tradeSource) return this.tradeSource.subscribeTrades(mints);
     for (const m of mints) {
       this.pendingUnsub.delete(m);
       if (!this.subscribed.has(m)) this.pendingSub.add(m);
@@ -61,6 +77,7 @@ export class PumpPortalFeed extends EventEmitter {
   }
 
   unsubscribeTrades(mints: string[]): void {
+    if (this.tradeSource) return this.tradeSource.unsubscribeTrades(mints);
     for (const m of mints) {
       this.pendingSub.delete(m);
       if (this.subscribed.has(m)) this.pendingUnsub.add(m);
@@ -149,7 +166,16 @@ export class PumpPortalFeed extends EventEmitter {
     } catch {
       return;
     }
-    if (!m || typeof m !== 'object' || typeof m.mint !== 'string') return; // ack/status messages
+    if (!m || typeof m !== 'object') return;
+    if (typeof m.mint !== 'string') {
+      // Acks are noise, but refusals (e.g. trade subscriptions needing a funded key) must not be silent.
+      const text = String(m.message ?? m.errors ?? '');
+      if (text && !/^successfully/i.test(text) && !this.notices.has(text)) {
+        this.notices.add(text);
+        log.warn(`[pumpportal] ${text}`);
+      }
+      return;
+    }
     const now = Date.now();
     const pool = typeof m.pool === 'string' ? m.pool : 'pump';
     this.calibrate(m.vTokensInBondingCurve);

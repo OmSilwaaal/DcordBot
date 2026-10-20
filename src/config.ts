@@ -39,6 +39,17 @@ export const config = {
 
   feeds: {
     pumpPortalWs: str('PUMPPORTAL_WS', 'wss://pumpportal.fun/api/data'),
+    /**
+     * Where trades come from. 'pumpportal' needs PUMPPORTAL_WS with a funded ?api-key=…;
+     * 'chain' decodes pump.fun trades from a Solana websocket instead (free).
+     */
+    tradeSource: ((): 'pumpportal' | 'chain' => {
+      const v = str('TRADE_SOURCE', '').toLowerCase();
+      if (v === 'pumpportal' || v === 'chain') return v;
+      return /api-key=/i.test(process.env.PUMPPORTAL_WS ?? '') ? 'pumpportal' : 'chain';
+    })(),
+    /** Solana websocket for the chain trade stream. ~40 MB/min, so a metered RPC plan can run out fast. */
+    solanaWsUrl: str('SOLANA_WS_URL', 'wss://api.mainnet-beta.solana.com'),
     /** Use a real provider (Helius/QuickNode/Triton). The public endpoint often rejects getTokenLargestAccounts. */
     rpcUrl: str('SOLANA_RPC_URL', 'https://api.mainnet-beta.solana.com'),
     rpcRps: num('RPC_RPS', 4),
