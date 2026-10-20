@@ -7,6 +7,21 @@ export function ensureDir(dir = DATA_DIR): void {
   fs.mkdirSync(dir, { recursive: true });
 }
 
+/** Throws a clear error if DATA_DIR can't be written (e.g. a root-owned volume with a non-root container user). */
+export function assertWritable(dir = DATA_DIR): void {
+  const probe = path.join(dir, '.write-test');
+  try {
+    ensureDir(dir);
+    fs.writeFileSync(probe, String(Date.now()));
+    fs.unlinkSync(probe);
+  } catch (e) {
+    throw new Error(
+      `DATA_DIR ${dir} is not writable (${e instanceof Error ? e.message : e}). ` +
+        'On Railway, set the service variable RAILWAY_RUN_UID=0 — volumes are mounted as root.',
+    );
+  }
+}
+
 export const dataPath = (name: string): string => path.join(DATA_DIR, name);
 
 /** data/<prefix>-YYYY-MM-DD.jsonl (UTC) — keeps any single file from growing forever. */

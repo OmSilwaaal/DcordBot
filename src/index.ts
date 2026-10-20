@@ -2,15 +2,16 @@ import { config } from './config.js';
 import { DiscordNotifier } from './discord/bot.js';
 import { PumpPortalFeed } from './feeds/pumpportal.js';
 import { SolPriceFeed } from './feeds/solPrice.js';
+import { runDiagnostics } from './signals/diagnostics.js';
 import { SignalEngine } from './signals/engine.js';
 import { PerformanceTracker } from './signals/performance.js';
-import { ensureDir } from './utils/files.js';
+import { assertWritable, DATA_DIR } from './utils/files.js';
 import { startHealthServer } from './utils/health.js';
 import { log } from './utils/logger.js';
 
 async function main(): Promise<void> {
-  ensureDir();
-  log.info('meme-signal-discord v2 starting');
+  assertWritable();
+  log.info(`meme-signal-discord v2 starting (data: ${DATA_DIR})`);
 
   const sol = new SolPriceFeed();
   await sol.start();
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   const feed = new PumpPortalFeed(config.feeds.pumpPortalWs, config.feeds.allowedPools);
   const engine = new SignalEngine(feed, sol, perf, discord);
   perf.on('finalized', (r) => void discord.updateSignal(r));
+  discord.setDiagnostics(() => runDiagnostics(engine, feed, sol, perf));
   engine.start();
   feed.start();
 

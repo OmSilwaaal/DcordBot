@@ -33,6 +33,8 @@ export const config = {
     channelId: str('DISCORD_CHANNEL_ID', ''),
     /** Set this to register slash commands instantly in one server. */
     guildId: str('DISCORD_GUILD_ID', ''),
+    /** Post "radar online" to the channel on every boot — instant proof the Discord side works. */
+    startupMessage: bool('STARTUP_MESSAGE', true),
   },
 
   feeds: {
@@ -119,7 +121,8 @@ export const config = {
     snapshotAgesSec: list('SNAPSHOT_AGES_SEC', ['60', '180', '300']).map(Number).filter(Number.isFinite),
   },
 
-  healthPort: num('HEALTH_PORT', 8080),
+  /** Railway (and most PaaS) inject PORT; HEALTH_PORT overrides it. */
+  healthPort: num('HEALTH_PORT', num('PORT', 8080)),
 };
 
 export type Config = typeof config;

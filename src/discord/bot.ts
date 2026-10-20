@@ -3,6 +3,7 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   type SendableChannels,
   SlashCommandBuilder,
 } from 'discord.js';
@@ -11,7 +12,8 @@ import type { Notifier } from '../signals/engine.js';
 import type { PerformanceTracker } from '../signals/performance.js';
 import type { SignalRecord } from '../types.js';
 import { log } from '../utils/logger.js';
-import { clean, filtersEmbed, resultLine, signalEmbed, statsEmbed } from './format.js';
+import type { DiagReport } from '../signals/diagnostics.js';
+import { clean, filtersEmbed, resultLine, signalEmbed, statsEmbed, statusEmbed, testSignalEmbed } from './format.js';
 
 const COMMANDS = [
   new SlashCommandBuilder()
@@ -20,11 +22,14 @@ const COMMANDS = [
     .addIntegerOption((o) => o.setName('hours').setDescription('Lookback (default 24)').setMinValue(1).setMaxValue(720)),
   new SlashCommandBuilder().setName('recent').setDescription('Last 10 signals and how they did'),
   new SlashCommandBuilder().setName('filters').setDescription('Current filter thresholds and trade plan'),
+  new SlashCommandBuilder().setName('status').setDescription('Live self-test: feed, RPC, APIs, storage, closest candidates'),
+  new SlashCommandBuilder().setName('test').setDescription('Post a clearly-labelled fake signal to the signals channel'),
 ].map((c) => c.toJSON());
 
 export class DiscordNotifier implements Notifier {
   readonly client = new Client({ intents: [GatewayIntentBits.Guilds] });
   private channel: SendableChannels | null = null;
+  private diagnostics: (() => Promise<DiagReport>) | null = null;
 
   constructor(private readonly perf: PerformanceTracker) {}
 
@@ -40,10 +45,46 @@ export class DiscordNotifier implements Notifier {
     await ready;
     log.info(`[discord] logged in as ${this.client.user?.tag}`);
 
-    const ch = await this.client.channels.fetch(channelId);
-    if (!ch || !ch.isSendable()) throw new Error(`Channel ${channelId} not found or bot can't send there`);
+    // Log which servers the bot is actually in — the #1 cause of "Missing Access" is the bot never joining.
+    const guilds = [...this.client.guilds.cache.values()];
+    log.info(
+      `[discord] bot is in ${guilds.length} server(s)` +
+        (guilds.length ? `: ${guilds.map((g) => `${g.name} (${g.id})`).join(', ')}` : ' — it was never invited'),
+    );
+
+    let ch;
+    try {
+      ch = await this.client.channels.fetch(channelId);
+    } catch (e) {
+      const code = (e as { code?: number }).code;
+      if (code === 50001)
+        throw new Error(
+          `Missing Access to channel ${channelId}. Either the bot isn't in the server that owns this channel ` +
+            `(invite it with the "bot" scope), the ID is wrong (group DMs and channels in other servers won't work), ` +
+            `or the channel is private and the bot has no View Channel permission there.`,
+        );
+      if (code === 10003) throw new Error(`Unknown Channel ${channelId}: that ID isn't a channel. Right-click the channel → Copy Channel ID.`);
+      throw e;
+    }
+    if (!ch || !ch.isSendable()) throw new Error(`Channel ${channelId} is not a text channel the bot can send to`);
+    if ('guild' in ch && ch.guild && 'permissionsFor' in ch) {
+      const perms = ch.permissionsFor(this.client.user!);
+      const need = ['ViewChannel', 'SendMessages', 'EmbedLinks', 'ReadMessageHistory'] as const;
+      const missing = need.filter((p) => !perms?.has(p));
+      if (missing.length) throw new Error(`Bot can see #${ch.name} but is missing permissions: ${missing.join(', ')}`);
+    }
     this.channel = ch;
     await this.registerCommands();
+    if (config.discord.startupMessage) {
+      await ch
+        .send('🟢 **Memecoin radar online** — watching pump.fun launches. Run `/status` for a live self-test.')
+        .catch((e) => log.warn('[discord] startup message failed', e));
+    }
+  }
+
+  /** Wired up in index.ts once the engine exists. */
+  setDiagnostics(fn: () => Promise<DiagReport>): void {
+    this.diagnostics = fn;
   }
 
   async stop(): Promise<void> {
@@ -97,9 +138,26 @@ export class DiscordNotifier implements Notifier {
         await i.reply({ content: lines.join('\n') || 'No signals yet.', allowedMentions: { parse: [] } });
       } else if (i.commandName === 'filters') {
         await i.reply({ embeds: [filtersEmbed()] });
+      } else if (i.commandName === 'status') {
+        if (!this.diagnostics) {
+          await i.reply({ content: 'Still starting up — try again in a few seconds.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        await i.deferReply(); // live checks can take ~10s; Discord needs an ack within 3s
+        await i.editReply({ embeds: [statusEmbed(await this.diagnostics())] });
+      } else if (i.commandName === 'test') {
+        if (!this.channel) {
+          await i.reply({ content: 'Signals channel not ready.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        await this.channel.send({ embeds: [testSignalEmbed()] });
+        await i.reply({ content: `✅ Test signal posted to <#${config.discord.channelId}>.`, flags: MessageFlags.Ephemeral });
       }
     } catch (e) {
       log.warn(`[discord] /${i.commandName} failed`, e);
+      const msg = `❌ /${i.commandName} failed: ${e instanceof Error ? e.message : e}`.slice(0, 1900);
+      if (i.deferred || i.replied) await i.editReply({ content: msg }).catch(() => {});
+      else await i.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(() => {});
     }
   }
 }

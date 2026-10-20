@@ -22,7 +22,7 @@ export class PumpPortalFeed extends EventEmitter {
   private flushTimer: NodeJS.Timeout | null = null;
   private watchdog: NodeJS.Timeout | null = null;
   private reconnectDelay = 1000;
-  private lastMessageAt = 0;
+  lastMessageAt = 0;
   private stopped = false;
   /** PumpPortal sends token amounts in UI units; if they ever arrive raw (6 decimals) we rescale. */
   private tokenScale: number | null = null;

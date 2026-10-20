@@ -1,7 +1,8 @@
 import { EmbedBuilder } from 'discord.js';
 import { config } from '../config.js';
 import type { SignalRecord } from '../types.js';
-import type { Summary } from '../signals/performance.js';
+import type { DiagReport } from '../signals/diagnostics.js';
+import { newPerfState, type Summary } from '../signals/performance.js';
 
 const COLORS = { A: 0x22c55e, B: 0xeab308, C: 0x3b82f6 } as const;
 const TIER_EMOJI = { A: '🟢', B: '🟡', C: '🔵' } as const;
@@ -149,4 +150,66 @@ export function filtersEmbed(): EmbedBuilder {
         value: `SL −${pl.stopLossPct}% · TP ${pl.takeProfitMult}× · Time ${pl.timeStopMin}m · Slip ${pl.entrySlippagePct}% · Costs ${pl.roundTripCostPct}%`,
       },
     );
+}
+
+// ── /status and /test ────────────────────────────────────────────────
+
+const ICON = (ok: boolean | null) => (ok === true ? '✅' : ok === false ? '❌' : '⚠️');
+
+export function statusEmbed(r: DiagReport): EmbedBuilder {
+  const broken = r.checks.filter((c) => c.ok === false).length;
+  const warn = r.checks.filter((c) => c.ok === null).length;
+  const s = r.stats;
+  const cands =
+    r.candidates
+      .map((c) => `**$${clean(c.symbol, 14)}** · score ${c.score} · curve ${p0(c.f.curvePct)} · ${usd(c.f.mcapUsd)} — _${clean(c.reason, 60)}_`)
+      .join('\n') || 'none yet — the bot needs a minute or two of launches';
+  return new EmbedBuilder()
+    .setColor(broken ? 0xef4444 : warn ? 0xeab308 : 0x22c55e)
+    .setTitle(broken ? `🩺 Radar status — ${broken} problem(s)` : warn ? '🩺 Radar status — running, with warnings' : '🩺 Radar status — all systems go')
+    .setDescription(r.checks.map((c) => `${ICON(c.ok)} **${c.name}** — ${c.detail}`).join('\n'))
+    .addFields(
+      {
+        name: `Pipeline (up ${r.uptimeMin.toFixed(0)}m)`,
+        value:
+          `Launches ${s.created} · trades ${s.trades} · evaluations ${s.evaluated}\n` +
+          `Verified ${s.verified} · rejected ${s.rejected} · **signals ${s.signals}** · forward-testing ${r.forwardTesting}`,
+      },
+      { name: 'Closest to signaling right now', value: cands.slice(0, 1024) },
+    )
+    .setFooter({ text: 'No signals yet is normal — the gates are strict. Candidates above show the filters are working.' })
+    .setTimestamp(Date.now());
+}
+
+/** Clearly-labelled fake signal: verifies channel permissions and embed rendering without touching real data. */
+export function testSignalEmbed(): EmbedBuilder {
+  const now = Date.now();
+  const fake: SignalRecord = {
+    id: `TEST-${now}`,
+    mint: 'TEST-NOT-A-REAL-TOKEN',
+    symbol: 'TEST',
+    name: 'Test signal — ignore',
+    signaledAt: now,
+    score: 77,
+    tier: 'B',
+    parts: { velocity: 20, flow: 15, pressure: 11, distribution: 15, organic: 8, socials: 3, ticker: 5 },
+    features: {
+      ageSec: 134, mcapSol: 160, mcapUsd: 28_800, curvePct: 34, uniqueBuyers: 61, holders: 55, buyers5m: 44,
+      newBuyersPerMin: 14.2, buyerAccel: 3, buys5m: 70, sells5m: 31, buyCountPct5m: 69, buySolPct5m: 72,
+      volSol5m: 48, netFlowSol5m: 21, netFlowRelPct: 13, medianBuySol5m: 0.31, top10Pct: 19.5, maxHolderPct: 4.2,
+      devPct: 2.1, devSoldPct: 0, sniperPct: 5.5, volConcTop3Pct: 24, washPct: 4, drawdownPct: 8, tickerDupes: 0,
+    },
+    onchain: { ok: true, mintAuthority: null, freezeAuthority: null, dangerousExtensions: [], top10Pct: 21.3, maxHolderPct: 4.4 },
+    rugcheck: { status: 'ok', dangers: [], warnings: [] },
+    socials: null,
+    entryMcapUsd: 28_800,
+    solPriceAtSignal: 180,
+    perf: newPerfState(),
+  };
+  const e = signalEmbed(fake);
+  return e
+    .setTitle('🧪 TEST SIGNAL — not a real token, do not buy')
+    .setURL(null)
+    .setColor(0x9ca3af)
+    .setFooter({ text: 'Posted by /test to verify the bot can post here. Real signals look like this.' });
 }

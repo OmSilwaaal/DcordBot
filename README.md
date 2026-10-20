@@ -82,11 +82,31 @@ docker build -t meme-signal . && docker run -d --env-file .env -v $(pwd)/data:/a
 npm run build && pm2 start ecosystem.config.cjs
 ```
 
+### Deploying on Railway
+
+The repo is Railway-ready: `railway.json` builds from the Dockerfile, health-checks `/health`, and restarts on crash.
+
+1. Push this folder to a **private** GitHub repo. `.env` is gitignored; never commit your tokens.
+2. In Railway, create a new project → **Deploy from GitHub repo** → pick the repo.
+3. Right-click the service → **Attach volume**, with mount path **`/app/data`**. Without a volume, forward-test results and the dataset are wiped on every redeploy.
+4. Under **Variables**, add everything from `.env.example` you want to change, plus:
+   - `DISCORD_TOKEN`, `DISCORD_CHANNEL_ID`, `DISCORD_GUILD_ID`, `SOLANA_RPC_URL` (required)
+   - `RAILWAY_RUN_UID=0` (required: Railway mounts volumes as root, and the image runs as a non-root user)
+5. Deploy and watch the logs for the `[status]` line every 60s. `ws=up` and a climbing `created=` count mean the feed is live.
+
+Keep it at **1 replica**. Two instances would double-post every signal, and PumpPortal asks for one connection per client.
+
+Expected cost on the Hobby plan: roughly 200–400 MB of RAM and a fraction of a vCPU, which lands around the $5 included usage. Check the **Metrics** tab after the first day.
+
 ## Discord commands
 
 - `/stats [hours]`: plan hit rates (TP / SL / time), average and median return after slippage and costs, peak distribution, and results by tier.
 - `/recent`: the last 10 signals with live or final results.
 - `/filters`: the active thresholds and trade plan.
+- `/status`: live self-test. It checks the PumpPortal feed, launch flow, SOL price, the Solana RPC holder check (run on a real token the bot is tracking), RugCheck, DexScreener and storage, then lists the 5 tokens closest to signaling and what each is waiting on.
+- `/test`: posts a clearly-labelled fake signal to the signals channel, to confirm permissions and see what alerts look like.
+
+On every boot the bot also posts "🟢 Memecoin radar online" to the channel. Set `STARTUP_MESSAGE=false` to turn that off.
 
 When a signal's 60-minute window ends, the bot edits the original alert in place with its result.
 

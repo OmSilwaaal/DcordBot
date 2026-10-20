@@ -32,6 +32,9 @@ export class SignalEngine extends EventEmitter {
   readonly tracker = new Tracker(config.tracking.tickerWindowMin * 60_000);
   readonly stats = { created: 0, trades: 0, evaluated: 0, verified: 0, signals: 0, rejected: 0, dropped: 0 };
 
+  readonly startedAt = Date.now();
+  /** Launch timestamps from the last 5 minutes (for /status). */
+  private recentCreates: number[] = [];
   private ticking = false;
   private verifying = new Set<string>();
   private sentTimes: number[] = [];
@@ -70,12 +73,45 @@ export class SignalEngine extends EventEmitter {
     for (const t of this.timers) clearInterval(t);
   }
 
+  launchesLast5m(now = Date.now()): number {
+    this.recentCreates = this.recentCreates.filter((t) => now - t < 300_000);
+    return this.recentCreates.length;
+  }
+
+  /** Newest token old enough to exist on-chain — used by /status to exercise the RPC + RugCheck path for real. */
+  probeToken(now = Date.now()): TokenState | undefined {
+    let best: TokenState | undefined;
+    for (const s of this.tracker.tokens.values()) {
+      const age = now - s.createdAt;
+      if (age < 30_000 || age > 15 * 60_000) continue;
+      if (!best || s.createdAt > best.createdAt) best = s;
+    }
+    return best;
+  }
+
+  /** Closest-to-signaling tokens right now, with the reason each one is still waiting. */
+  topCandidates(n = 5, now = Date.now()) {
+    const rows: { symbol: string; mint: string; score: number; f: Features; reason: string }[] = [];
+    for (const s of this.tracker.tokens.values()) {
+      if (s.status !== 'watching' && s.status !== 'verifying') continue;
+      const f = computeFeatures(s, now, this.sol.value, config.tracking.sniperWindowSec);
+      const gate = checkGates(f);
+      const score = computeScore(f, s.metadata ?? null).total;
+      const reason =
+        s.status === 'verifying' ? 'verifying now' : gate.pass ? (s.waitReason ?? 'passes gates') : gate.reason;
+      rows.push({ symbol: s.symbol, mint: s.mint, score, f, reason });
+    }
+    return rows.sort((a, b) => b.score - a.score).slice(0, n);
+  }
+
   // ── Feed handlers ────────────────────────────────────────────────────
 
   private onCreate(e: CreateEvent): void {
     if (this.tracker.get(e.mint)) return;
     const s = this.tracker.create(e);
     this.stats.created++;
+    this.recentCreates.push(e.receivedAt);
+    if (this.recentCreates.length > 5000) this.recentCreates.splice(0, this.recentCreates.length - 5000);
     if (s.tickerDupes > config.gates.maxTickerDupes) {
       this.tracker.remove(e.mint); // copycat: don't spend a subscription on it
       return;
