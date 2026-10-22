@@ -23,6 +23,9 @@ function frac(key: string, def: number): number {
 export const VENUES = {
   skinport: { sellFee: frac('FEE_SKINPORT_SELL', 0.08), cashoutFee: frac('FEE_SKINPORT_CASHOUT', 0), buyFee: 0 },
   csfloat: { sellFee: frac('FEE_CSFLOAT_SELL', 0.02), cashoutFee: frac('FEE_CSFLOAT_CASHOUT', 0.025), buyFee: 0 },
+  // Waxpeer 6% sell; Market.CSGO 5% sell + 5% withdrawal (brief: re-check monthly)
+  waxpeer: { sellFee: frac('FEE_WAXPEER_SELL', 0.06), cashoutFee: 0, buyFee: 0 },
+  marketcsgo: { sellFee: frac('FEE_MARKETCSGO_SELL', 0.05), cashoutFee: frac('FEE_MARKETCSGO_CASHOUT', 0.05), buyFee: 0 },
   steam: { sellFee: frac('FEE_STEAM_SELL', 0.15), cashoutFee: 0, buyFee: 0 },
 } satisfies Record<string, Venue>;
 

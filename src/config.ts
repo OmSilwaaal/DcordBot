@@ -189,6 +189,8 @@ export const config = {
     minNetEdge: num('SKINS_MIN_NET_EDGE', 0.05),
     /** Optional CSFloat API key (free, from your CSFloat profile). Enables a second price check. */
     csfloatKey: str('CSFLOAT_API_KEY', ''),
+    /** Chinese markets trade a few % below the West; only flag a gap beyond this fraction. */
+    chinaBuffer: num('SKINS_CHINA_BUFFER', 0.1),
     /** Edges above this are discarded as mismatched comparisons. */
     maxNetEdge: num('SKINS_MAX_NET_EDGE', 0.6),
     /** Reference price needs at least this many sales in 7 days. */

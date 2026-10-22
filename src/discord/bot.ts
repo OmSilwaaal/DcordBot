@@ -222,6 +222,12 @@ export class DiscordNotifier implements Notifier {
             `**Skin scanner** · last scan ${last} · ${k.scanned} items · deals ${k.lastDeals.length}` +
             (k.lastError ? ` · ⚠️ ${k.lastError}` : '') +
             `
+` +
+            k.book
+              .status()
+              .map((m) => `${m.id}: ${m.error ? '⚠️ ' + m.error : m.ageMin === null ? 'loading' : `${m.items} items, ${m.ageMin}m old`}`)
+              .join(' · ') +
+            `
 Min net edge ${(config.skins.minNetEdge * 100).toFixed(1)}% · Skinport break-even spread ${(breakEvenSpread('skinport') * 100).toFixed(1)}% · read-only`,
           flags: MessageFlags.Ephemeral,
         });
