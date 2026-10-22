@@ -14,6 +14,7 @@ import type { SignalRecord } from '../types.js';
 import { log } from '../utils/logger.js';
 import type { DiagReport } from '../signals/diagnostics.js';
 import type { SignalEngine } from '../signals/engine.js';
+import { buildExport } from './export.js';
 import { breakEvenSpread } from '../skins/fees.js';
 import { dealEmbed, type SkinScanner } from '../skins/scanner.js';
 import {
@@ -38,6 +39,11 @@ const COMMANDS = [
   new SlashCommandBuilder().setName('funnel').setDescription('Where tokens are getting filtered out, and which gate blocks the most'),
   new SlashCommandBuilder().setName('test').setDescription('Post a clearly-labelled fake signal to the signals channel'),
 ].map((c) => c.toJSON());
+
+const EXPORT_COMMAND = new SlashCommandBuilder()
+  .setName('export')
+  .setDescription('Owner only: attach the bot data logs (signals, dataset) as gzip files')
+  .toJSON();
 
 const SKIN_COMMANDS = [
   new SlashCommandBuilder()
@@ -152,7 +158,11 @@ export class DiscordNotifier implements Notifier {
   }
 
   private commands() {
-    return config.skins.enabled ? [...COMMANDS, ...SKIN_COMMANDS] : COMMANDS;
+    return [
+      ...COMMANDS,
+      ...(config.skins.enabled ? SKIN_COMMANDS : []),
+      ...(config.discord.ownerId ? [EXPORT_COMMAND] : []),
+    ];
   }
 
   private async registerCommands(): Promise<void> {
@@ -198,6 +208,15 @@ export class DiscordNotifier implements Notifier {
           return;
         }
         await i.reply({ embeds: [funnelEmbed(this.engine.funnelReport())] });
+      } else if (i.commandName === 'export') {
+        // Trading data stays private: owner only, reply visible only to them.
+        if (!config.discord.ownerId || i.user.id !== config.discord.ownerId) {
+          await i.reply({ content: 'Not allowed.', flags: MessageFlags.Ephemeral });
+          return;
+        }
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const { files, summary } = buildExport();
+        await i.editReply({ content: summary, files });
       } else if (i.commandName === 'deals') {
         if (!this.skins) {
           await i.reply({ content: 'Skin scanner is not enabled (SKINS_ENABLED=true).', flags: MessageFlags.Ephemeral });

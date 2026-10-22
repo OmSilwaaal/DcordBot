@@ -33,6 +33,8 @@ export const config = {
     channelId: str('DISCORD_CHANNEL_ID', ''),
     /** Set this to register slash commands instantly in one server. */
     guildId: str('DISCORD_GUILD_ID', ''),
+    /** Your Discord user ID. Enables the owner-only /export command (attaches the bot's data logs). */
+    ownerId: str('OWNER_ID', ''),
     /** Post "radar online" to the channel on every boot — instant proof the Discord side works. */
     startupMessage: bool('STARTUP_MESSAGE', true),
   },
