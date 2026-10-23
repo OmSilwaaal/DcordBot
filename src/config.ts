@@ -110,6 +110,43 @@ export const config = {
     maxFreshWalletPct: num('MAX_FRESH_WALLET_PCT', 100),
     maxClusterHoldPct: num('MAX_CLUSTER_HOLD_PCT', 100),
     maxDevFundedBuyers: num('MAX_DEV_FUNDED_BUYERS', 1000),
+
+    // Wallet-intelligence gates (stream stage). Also OFF (log-only) until the dataset shows where to set them.
+    maxLaunchBlockHoldPct: num('MAX_LAUNCH_BLOCK_HOLD_PCT', 100),
+    maxSlotClusterHoldPct: num('MAX_SLOT_CLUSTER_HOLD_PCT', 100),
+    maxEarlyBuyersSoldPct: num('MAX_EARLY_BUYERS_SOLD_PCT', 100),
+    maxFlipperHoldPct: num('MAX_FLIPPER_HOLD_PCT', 100),
+    maxSerialSniperHoldPct: num('MAX_SERIAL_SNIPER_HOLD_PCT', 100),
+    maxProfitableBuyers: num('MAX_PROFITABLE_BUYERS', 1000),
+    maxLoserBuyers1m: num('MAX_LOSER_BUYERS_1M', 1000),
+  },
+
+  /**
+   * Wallet book: every wallet's past positions on tokens the bot tracked, used to classify
+   * the buyers of new tokens. Built from the trade stream, so it costs no RPC calls.
+   */
+  walletBook: {
+    /** Positions a wallet needs before it's classified at all. */
+    minPositions: num('WALLET_MIN_POSITIONS', 3),
+    /** Profitable trader: at least this many positions, win rate and total profit. */
+    profitableMinPositions: num('WALLET_PROFITABLE_MIN_POSITIONS', 5),
+    profitableMinWinPct: num('WALLET_PROFITABLE_MIN_WIN_PCT', 50),
+    profitableMinPnlSol: num('WALLET_PROFITABLE_MIN_PNL_SOL', 1),
+    /** Habitual loser: at least this many positions, a win rate below this, and a net loss. */
+    loserMinPositions: num('WALLET_LOSER_MIN_POSITIONS', 5),
+    loserMaxWinPct: num('WALLET_LOSER_MAX_WIN_PCT', 30),
+    /**
+     * Flipper: sells within this many seconds of first buying on at least this share of positions.
+     * 120s / 50% separated outcomes better than 60s / 70% in the Oct 21 backfill.
+     */
+    flipSec: num('WALLET_FLIP_SEC', 120),
+    flipperMinPct: num('WALLET_FLIPPER_MIN_PCT', 50),
+    /** Serial sniper: first buy within 2 blocks (or 3s) of launch on at least this share of positions. */
+    sniperMinPct: num('WALLET_SNIPER_MIN_PCT', 50),
+    /** Positions smaller than this are dust and aren't recorded. */
+    minPositionSol: num('WALLET_MIN_POSITION_SOL', 0.01),
+    maxWallets: num('WALLET_BOOK_MAX', 400_000),
+    keepDays: num('WALLET_BOOK_KEEP_DAYS', 14),
   },
 
   /** Early-buyer forensics at verify time: wallet age + who funded each wallet. Costs ~20–45 RPC calls per candidate. */

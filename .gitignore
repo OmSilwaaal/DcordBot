@@ -7,3 +7,5 @@ logs/
 graphify-out/
 .graphify_python
 .graphify_*.json
+reports/
+.venv/

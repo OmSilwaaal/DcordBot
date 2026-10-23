@@ -75,6 +75,7 @@ export function signalEmbed(r: SignalRecord): EmbedBuilder {
       { name: '🔗 Socials', value: socials, inline: true },
       { name: '👤 Creator', value: creatorLine(f), inline: true },
       { name: '🕵️ Wallets', value: walletLine(r), inline: true },
+      { name: '🧬 Wallet intel', value: walletIntelLine(f), inline: true },
       { name: '📣 Attention', value: attentionLine(r), inline: true },
       {
         name: '🧮 Score breakdown',
@@ -110,6 +111,21 @@ function walletLine(r: SignalRecord): string {
   return (
     `Fresh ${p0(w.freshPct)} · low-activity ${p0(w.lowActivityPct)} (n=${w.sampled})\n` +
     `Clusters ${w.clusters}${w.clusters ? ` (max ${w.largestCluster}) hold ${p1(w.clusterHoldPct)}` : ''} · dev-funded ${w.devFundedBuyers}`
+  );
+}
+
+function walletIntelLine(f: SignalRecord['features']): string {
+  // Records from before wallet intel existed don't have these fields.
+  if (f.knownBuyerPct === undefined) return 'not recorded';
+  const launch =
+    f.launchBlockHoldPct < 0
+      ? 'Launch block: unknown'
+      : `Launch block ${f.launchBlockBuyers} wallets, hold ${p1(f.launchBlockHoldPct)}`;
+  return (
+    `${launch} · same-block groups ${p1(f.slotClusterHoldPct)}\n` +
+    `First buyers sold ${p0(f.earlyBuyersSoldPct)} · known ${p0(f.knownBuyerPct)} of buyers\n` +
+    `Flippers ${p1(f.flipperHoldPct)} · serial snipers ${p1(f.serialSniperHoldPct)} · profitable wallets ${f.profitableBuyers}\n` +
+    `Habitual losers: ${f.loserBuyers1m} buying now, hold ${p1(f.loserHoldPct)}`
   );
 }
 
@@ -184,6 +200,13 @@ export function filtersEmbed(): EmbedBuilder {
           ` · creator launches/24h ≤ ${g.maxCreatorLaunches24h}\n_Values of 100 / 1000 mean log-only (gate off)._`,
       },
       {
+        name: 'Wallet intel (stream)',
+        value:
+          `Launch-block hold ≤ ${g.maxLaunchBlockHoldPct}% · same-block groups ≤ ${g.maxSlotClusterHoldPct}% · first buyers sold ≤ ${g.maxEarlyBuyersSoldPct}%\n` +
+          `Flippers ≤ ${g.maxFlipperHoldPct}% · serial snipers ≤ ${g.maxSerialSniperHoldPct}% · profitable-wallet buyers ≤ ${g.maxProfitableBuyers}` +
+          ` · losers buying (1m) ≤ ${g.maxLoserBuyers1m}\n_100 / 1000 mean log-only (gate off)._`,
+      },
+      {
         name: 'Plan',
         value: `SL −${pl.stopLossPct}% · TP ${pl.takeProfitMult}× · Time ${pl.timeStopMin}m · Slip ${pl.entrySlippagePct}% · Costs ${pl.roundTripCostPct}%`,
       },
@@ -238,6 +261,9 @@ export function testSignalEmbed(): EmbedBuilder {
       devPct: 2.1, devSoldPct: 0, sniperPct: 5.5, volConcTop3Pct: 24, washPct: 4, drawdownPct: 8, tickerDupes: 0,
       repeatSizePct5m: 6, creatorPriorLaunches: 2, creatorLaunches24h: 1, creatorPriorGraduated: 0,
       creatorBestPriorPeakSol: 95, creatorMinSinceLast: 340, launchesPerMin: 14, graduations1h: 9, solChange1hPct: 0.4,
+      launchBlockBuyers: 2, launchBlockHoldPct: 3.1, earlyBlocksHoldPct: 6.4, slotClusterHoldPct: 4.2,
+      earlyBuyersSoldPct: 38, knownBuyerPct: 64, profitableBuyers: 3, profitableHoldPct: 2.7, flipperHoldPct: 5.9,
+      serialSniperHoldPct: 2.2, loserHoldPct: 1.4, loserBuyers1m: 2,
     },
     wallets: { ok: true, sampled: 20, freshPct: 15, lowActivityPct: 20, clusters: 1, largestCluster: 2, clusterWallets: 2, clusterHoldPct: 1.8, devFundedBuyers: 0 },
     dexOrders: { ok: true, paidProfile: true, communityTakeover: false, ads: 0, boosts: 0, minToFirstPaid: 4 },

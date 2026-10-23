@@ -4,6 +4,7 @@ import { CreatorBook } from '../analysis/creators.js';
 import { dexOrders } from '../analysis/dexOrders.js';
 import { computeFeatures, type FeatureContext } from '../analysis/features.js';
 import { analyzeWallets } from '../analysis/wallets.js';
+import { WalletBook } from '../analysis/walletBook.js';
 import { xMentions } from '../analysis/xMentions.js';
 import { checkGates, failingGates } from '../analysis/gates.js';
 import { fetchMetadata } from '../analysis/metadata.js';
@@ -50,6 +51,7 @@ export class SignalEngine extends EventEmitter {
   private recentCreates: number[] = [];
   private recentGraduations: number[] = [];
   readonly creators = new CreatorBook();
+  readonly wallets = new WalletBook();
   private ticking = false;
   private verifying = new Set<string>();
   private sentTimes: number[] = [];
@@ -83,11 +85,13 @@ export class SignalEngine extends EventEmitter {
     every(60_000, () => void this.pollOutcomes());
     every(60_000, () => this.logStatus());
     every(60_000, () => this.creators.save());
+    every(300_000, () => this.wallets.save());
   }
 
   stop(): void {
     for (const t of this.timers) clearInterval(t);
     this.creators.save();
+    this.wallets.save();
   }
 
   launchesLast5m(now = Date.now()): number {
@@ -104,6 +108,7 @@ export class SignalEngine extends EventEmitter {
       solUsd: this.sol.value,
       sniperWindowSec: config.tracking.sniperWindowSec,
       creator: (c, ts) => this.creators.stats(c, ts),
+      wallet: (w) => this.wallets.profile(w),
       market: {
         launchesPerMin: this.recentCreates.length / uptimeMin,
         graduations1h: this.recentGraduations.length,
@@ -501,6 +506,7 @@ export class SignalEngine extends EventEmitter {
   private drop(s: TokenState, reason: string): void {
     this.foldIntoFunnel(s);
     this.creators.recordPeak(s.mint, s.peakMcapSol);
+    this.wallets.recordToken(s);
     if (config.dataset.enabled && s.snapshots.length) {
       appendJsonl(dailyFile('dataset'), {
         mint: s.mint,
@@ -513,7 +519,10 @@ export class SignalEngine extends EventEmitter {
         graduated: s.graduated,
         peakMcapSol: s.peakMcapSol,
         lastMcapSol: s.mcapSol,
+        createSlot: s.createSlot,
         snapshots: s.snapshots,
+        // Market cap (SOL) in 15s buckets since creation: lets any entry/exit rule be replayed.
+        path: s.path,
       });
     }
     if (!this.perf.active.has(s.mint)) this.feed.unsubscribeTrades([s.mint]);
@@ -539,7 +548,8 @@ export class SignalEngine extends EventEmitter {
     log.info(
       `[status] tracked=${this.tracker.size} subs=${this.feed.subscriptionCount} ws=${this.feed.connected ? 'up' : 'DOWN'} ` +
         `created=${st.created} trades=${st.trades} evals=${st.evaluated} verified=${st.verified} ` +
-        `signals=${st.signals} rejected=${st.rejected} forwardTesting=${this.perf.active.size} sol=$${this.sol.value?.toFixed(2) ?? '?'}`,
+        `signals=${st.signals} rejected=${st.rejected} forwardTesting=${this.perf.active.size} walletBook=${this.wallets.size} ` +
+        `sol=$${this.sol.value?.toFixed(2) ?? '?'}`,
     );
   }
 }

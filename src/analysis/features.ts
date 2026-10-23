@@ -1,6 +1,7 @@
 import type { Features } from '../types.js';
 import type { TokenState } from '../state/tracker.js';
 import type { CreatorStats } from './creators.js';
+import type { WalletProfile } from './walletBook.js';
 import { clamp, median, sum } from '../utils/math.js';
 
 /**
@@ -26,7 +27,104 @@ export interface FeatureContext {
   solUsd: number | null;
   sniperWindowSec: number;
   creator: (creator: string, launchTs: number) => CreatorStats;
+  /** Track record of a wallet from earlier tokens, or null if it has too few positions. */
+  wallet: (wallet: string) => WalletProfile | null;
   market: { launchesPerMin: number; graduations1h: number; solChange1hPct: number };
+}
+
+/** First-time buyers of the token tracked for "have the early buyers sold?". */
+const EARLY_BUYERS = 20;
+/** A block with at least this many first-time buyers of one token is treated as coordinated. */
+const SLOT_CLUSTER_MIN = 3;
+/** Blocks after creation that still count as the launch (2 blocks is ~1s). */
+const EARLY_BLOCKS = 2;
+
+type WalletIntel = Pick<
+  Features,
+  | 'launchBlockBuyers' | 'launchBlockHoldPct' | 'earlyBlocksHoldPct' | 'slotClusterHoldPct' | 'earlyBuyersSoldPct'
+  | 'knownBuyerPct' | 'profitableBuyers' | 'profitableHoldPct' | 'flipperHoldPct' | 'serialSniperHoldPct'
+  | 'loserHoldPct' | 'loserBuyers1m'
+>;
+
+/** Who is buying: launch-block bundles, coordinated blocks, early buyers exiting, and buyers' track records. */
+function walletIntel(s: TokenState, now: number, ctx: FeatureContext): WalletIntel {
+  const launch = s.createSlot;
+  const buyersBySlot = new Map<number, number>();
+  for (const [wallet, slot] of s.firstBuySlot) {
+    if (wallet !== s.creator) buyersBySlot.set(slot, (buyersBySlot.get(slot) ?? 0) + 1);
+  }
+
+  let launchBuyers = 0;
+  let launchBal = 0;
+  let earlyBal = 0;
+  let clusterBal = 0;
+  let profitableBal = 0;
+  let flipperBal = 0;
+  let sniperBal = 0;
+  let loserBal = 0;
+  for (const [wallet, bal] of s.balances) {
+    if (bal <= 0 || wallet === s.creator) continue;
+    const slot = s.firstBuySlot.get(wallet);
+    if (slot !== undefined) {
+      if (launch !== null && slot === launch) launchBal += bal;
+      if (launch !== null && slot - launch <= EARLY_BLOCKS) earlyBal += bal;
+      if ((buyersBySlot.get(slot) ?? 0) >= SLOT_CLUSTER_MIN) clusterBal += bal;
+    }
+    const cls = ctx.wallet(wallet)?.cls;
+    if (cls === 'profitable') profitableBal += bal;
+    else if (cls === 'flipper') flipperBal += bal;
+    else if (cls === 'sniper') sniperBal += bal;
+    else if (cls === 'loser') loserBal += bal;
+  }
+
+  // Distinct wallets buying in the last minute that habitually lose: late money arriving.
+  const recentBuyers = new Set<string>();
+  let loserBuyers1m = 0;
+  for (let i = s.trades.length - 1; i >= 0 && s.trades[i].ts >= now - 60_000; i--) {
+    const t = s.trades[i];
+    if (!t.isBuy || t.wallet === s.creator || recentBuyers.has(t.wallet)) continue;
+    recentBuyers.add(t.wallet);
+    if (ctx.wallet(t.wallet)?.cls === 'loser') loserBuyers1m++;
+  }
+
+  let known = 0;
+  let profitable = 0;
+  let buyers = 0;
+  let earlyPeak = 0;
+  let earlyNow = 0;
+  let early = 0;
+  // firstBuyAt is in insertion order, i.e. buy order.
+  for (const wallet of s.firstBuyAt.keys()) {
+    if (wallet === s.creator) continue;
+    buyers++;
+    if (launch !== null && s.firstBuySlot.get(wallet) === launch) launchBuyers++;
+    const p = ctx.wallet(wallet);
+    if (p) {
+      known++;
+      if (p.cls === 'profitable') profitable++;
+    }
+    if (early < EARLY_BUYERS) {
+      early++;
+      earlyPeak += s.walletPeak.get(wallet) ?? 0;
+      earlyNow += s.balances.get(wallet) ?? 0;
+    }
+  }
+
+  const unknownLaunch = launch === null ? -1 : null;
+  return {
+    launchBlockBuyers: unknownLaunch ?? launchBuyers,
+    launchBlockHoldPct: unknownLaunch ?? pct(launchBal, PUMP.TOTAL_SUPPLY),
+    earlyBlocksHoldPct: unknownLaunch ?? pct(earlyBal, PUMP.TOTAL_SUPPLY),
+    slotClusterHoldPct: pct(clusterBal, PUMP.TOTAL_SUPPLY),
+    earlyBuyersSoldPct: earlyPeak > 0 ? clamp(pct(earlyPeak - earlyNow, earlyPeak), 0, 100) : 0,
+    knownBuyerPct: pct(known, buyers),
+    profitableBuyers: profitable,
+    profitableHoldPct: pct(profitableBal, PUMP.TOTAL_SUPPLY),
+    flipperHoldPct: pct(flipperBal, PUMP.TOTAL_SUPPLY),
+    serialSniperHoldPct: pct(sniperBal, PUMP.TOTAL_SUPPLY),
+    loserHoldPct: pct(loserBal, PUMP.TOTAL_SUPPLY),
+    loserBuyers1m,
+  };
 }
 
 /** Buy sizes that repeat exactly (to 1e-6 SOL) ≥3 times among recent buys — scripted volume bots. */
@@ -146,5 +244,6 @@ export function computeFeatures(s: TokenState, now: number, ctx: FeatureContext)
     launchesPerMin: ctx.market.launchesPerMin,
     graduations1h: ctx.market.graduations1h,
     solChange1hPct: ctx.market.solChange1hPct,
+    ...walletIntel(s, now, ctx),
   };
 }

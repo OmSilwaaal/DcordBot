@@ -60,9 +60,12 @@ function datasetReport(): void {
     console.log(`\n[snapshot at ${age}s] n=${snaps.length} · base TP-first rate ${f1(base)}%`);
     console.log(`${pad('feature', 18)} ${['Q1 (low)', 'Q2', 'Q3', 'Q4', 'Q5 (high)'].map((q) => pad(q, 22)).join('')} lift`);
 
-    const keys = Object.keys(snaps[0].features).filter(
-      (k) => typeof (snaps[0].features as unknown as Record<string, unknown>)[k] === 'number',
-    ) as (keyof Features)[];
+    // Union across snapshots: features added later (e.g. wallet intel) are missing from older rows.
+    const keySet = new Set<string>();
+    for (const s of snaps) {
+      for (const [k, v] of Object.entries(s.features)) if (typeof v === 'number') keySet.add(k);
+    }
+    const keys = [...keySet] as (keyof Features)[];
 
     const results: { key: string; line: string; lift: number }[] = [];
     for (const k of keys) {

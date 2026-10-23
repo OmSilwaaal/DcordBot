@@ -3,6 +3,7 @@ import { config } from '../config.js';
 import type { PerfState, SignalRecord } from '../types.js';
 import { appendJsonl, dataPath, readJson, readJsonl, writeJsonAtomic } from '../utils/files.js';
 import { median } from '../utils/math.js';
+import { pushPath } from '../utils/path.js';
 
 export const CHECKPOINTS = [
   { key: '5m', min: 5 },
@@ -21,6 +22,7 @@ export function newPerfState(): PerfState {
     checkpoints: Object.fromEntries(CHECKPOINTS.map((c) => [c.key, null])),
     graduated: false,
     lastUpdate: 0,
+    path: [],
     sim: { open: true, exitReason: null, exitMult: null, returnPct: null },
   };
 }
@@ -89,6 +91,7 @@ export class PerformanceTracker extends EventEmitter {
       p.peakAtMin = elapsedMin;
     }
     if (mult < p.troughMult) p.troughMult = mult;
+    pushPath((p.path ??= []), elapsedMin * 60, mult);
     for (const c of CHECKPOINTS) if (p.checkpoints[c.key] === null && elapsedMin >= c.min) p.checkpoints[c.key] = mult;
 
     if (p.sim.open) {

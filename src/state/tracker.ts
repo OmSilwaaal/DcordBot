@@ -1,4 +1,5 @@
-import type { CreateEvent, Features, TokenMetadata, TradeEvent } from '../types.js';
+import type { CreateEvent, Features, PathPoint, TokenMetadata, TradeEvent } from '../types.js';
+import { pushPath } from '../utils/path.js';
 
 export interface Trade {
   ts: number;
@@ -48,6 +49,19 @@ export class TokenState {
   totalVolSol = 0;
   devPeak = 0;
 
+  // Per-wallet position detail, for wallet intelligence and the wallet book.
+  /** Block of each wallet's first buy (chain feed only). */
+  firstBuySlot = new Map<string, number>();
+  /** Highest balance each wallet reached, so selling can be measured against it. */
+  walletPeak = new Map<string, number>();
+  walletSolIn = new Map<string, number>();
+  walletSolOut = new Map<string, number>();
+  firstSellAt = new Map<string, number>();
+  /** Creation block, once a trade from the chain feed reports it. */
+  createSlot: number | null = null;
+  /** Market cap (SOL) in 15s buckets since creation. */
+  path: PathPoint[] = [];
+
   vTokens: number;
   vSol: number;
   mcapSol: number;
@@ -96,8 +110,11 @@ export class TokenState {
       this.walletBuys.set(e.creator, 1);
       this.totalVolSol += e.initialBuySol;
       this.devPeak = e.initialBuyTokens;
+      this.walletPeak.set(e.creator, e.initialBuyTokens);
+      this.walletSolIn.set(e.creator, e.initialBuySol);
       this.trades.push({ ts: e.receivedAt, wallet: e.creator, isBuy: true, sol: e.initialBuySol });
     }
+    pushPath(this.path, 0, e.mcapSol);
   }
 
   applyTrade(t: TradeEvent, plan: { takeProfitMult: number; stopLossPct: number }): void {
@@ -107,12 +124,20 @@ export class TokenState {
 
     if (t.newBalance > 0) this.balances.set(t.wallet, t.newBalance);
     else this.balances.delete(t.wallet);
+    if (t.newBalance > (this.walletPeak.get(t.wallet) ?? 0)) this.walletPeak.set(t.wallet, t.newBalance);
+    if (this.createSlot === null && t.launchSlot) this.createSlot = t.launchSlot;
 
     if (t.isBuy) {
-      if (!this.firstBuyAt.has(t.wallet)) this.firstBuyAt.set(t.wallet, ts);
+      if (!this.firstBuyAt.has(t.wallet)) {
+        this.firstBuyAt.set(t.wallet, ts);
+        if (t.slot) this.firstBuySlot.set(t.wallet, t.slot);
+      }
       this.walletBuys.set(t.wallet, (this.walletBuys.get(t.wallet) ?? 0) + 1);
+      this.walletSolIn.set(t.wallet, (this.walletSolIn.get(t.wallet) ?? 0) + t.sol);
     } else {
+      if (!this.firstSellAt.has(t.wallet)) this.firstSellAt.set(t.wallet, ts);
       this.walletSells.set(t.wallet, (this.walletSells.get(t.wallet) ?? 0) + 1);
+      this.walletSolOut.set(t.wallet, (this.walletSolOut.get(t.wallet) ?? 0) + t.sol);
     }
     this.walletVol.set(t.wallet, (this.walletVol.get(t.wallet) ?? 0) + t.sol);
     this.totalVolSol += t.sol;
@@ -123,6 +148,7 @@ export class TokenState {
     if (t.mcapSol > 0) {
       this.mcapSol = t.mcapSol;
       if (t.mcapSol > this.peakMcapSol) this.peakMcapSol = t.mcapSol;
+      pushPath(this.path, (ts - this.createdAt) / 1000, t.mcapSol);
       this.updateSnapshots(plan);
     }
 

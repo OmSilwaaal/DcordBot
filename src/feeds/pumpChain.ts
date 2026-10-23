@@ -57,17 +57,22 @@ interface RawTrade {
   vSol: number;
   signature: string;
   receivedAt: number;
+  slot: number;
   /** Dev buy inside the create transaction: PumpPortal's create event already carries it. */
   inCreateTx: boolean;
 }
+
+type DecodedTrade = Omit<RawTrade, 'signature' | 'receivedAt' | 'slot' | 'inCreateTx'>;
 
 interface MintBook {
   balances: Map<string, number>;
   buffered: RawTrade[];
   lastSeen: number;
+  /** Block of the create transaction, if this feed saw it. */
+  createSlot?: number;
 }
 
-function decodeTrade(b: Buffer): Omit<RawTrade, 'signature' | 'receivedAt' | 'inCreateTx'> | null {
+function decodeTrade(b: Buffer): DecodedTrade | null {
   // mint, sol_amount, token_amount, is_buy, user, timestamp, virtual_sol_reserves, virtual_token_reserves, …
   if (b.length < 8 + 32 + 8 + 8 + 1 + 32 + 8 + 8 + 8) return null;
   let o = 8;
@@ -95,6 +100,30 @@ function decodeCreateMint(b: Buffer): string | null {
     o += 4 + b.readUInt32LE(o);
   }
   return o + 32 <= b.length ? base58(b.subarray(o, o + 32)) : null;
+}
+
+export type DecodedPumpTrade = DecodedTrade;
+
+/**
+ * Decodes the pump.fun events in one transaction's log lines: its trades, and the mints
+ * it created. Shared with the backfill tool so history is read exactly like the live feed.
+ */
+export function decodePumpLogs(logs: string[]): { trades: DecodedTrade[]; created: Set<string> } {
+  const trades: DecodedTrade[] = [];
+  const created = new Set<string>();
+  for (const line of logs) {
+    if (!line.startsWith('Program data: ')) continue;
+    const b = Buffer.from(line.slice(14), 'base64');
+    const kind = b.subarray(0, 8).toString('hex');
+    if (kind === TRADE_EVENT) {
+      const t = decodeTrade(b);
+      if (t) trades.push(t);
+    } else if (kind === CREATE_EVENT) {
+      const mint = decodeCreateMint(b);
+      if (mint) created.add(mint);
+    }
+  }
+  return { trades, created };
 }
 
 interface Socket {
@@ -248,38 +277,34 @@ export class PumpChainFeed extends EventEmitter {
   }
 
   private handle(text: string): void {
-    let value: { signature?: string; logs?: string[] } | undefined;
+    let result: { context?: { slot?: number }; value?: { signature?: string; logs?: string[] } } | undefined;
     try {
-      value = JSON.parse(text)?.params?.result?.value;
+      result = JSON.parse(text)?.params?.result;
     } catch {
       return;
     }
+    const value = result?.value;
     if (!value?.logs) return;
     const now = Date.now();
     const signature = value.signature ?? '';
+    const slot = result?.context?.slot ?? 0;
 
-    const trades: Omit<RawTrade, 'signature' | 'receivedAt' | 'inCreateTx'>[] = [];
-    const created = new Set<string>();
-    for (const line of value.logs) {
-      if (!line.startsWith('Program data: ')) continue;
-      const b = Buffer.from(line.slice(14), 'base64');
-      const kind = b.subarray(0, 8).toString('hex');
-      if (kind === TRADE_EVENT) {
-        const t = decodeTrade(b);
-        if (t) trades.push(t);
-      } else if (kind === CREATE_EVENT) {
-        const mint = decodeCreateMint(b);
-        if (mint) created.add(mint);
-      }
+    const { trades, created } = decodePumpLogs(value.logs);
+
+    // Launch block, even when the create transaction carries no dev buy: bundles are judged against it.
+    for (const mint of created) {
+      const book: MintBook = this.books.get(mint) ?? { balances: new Map(), buffered: [], lastSeen: now };
+      if (slot && book.createSlot === undefined) book.createSlot = slot;
+      this.books.set(mint, book);
     }
 
     for (const t of trades) {
       this.tradesSeen++;
-      const raw: RawTrade = { ...t, signature, receivedAt: now, inCreateTx: created.has(t.mint) };
+      const raw: RawTrade = { ...t, signature, receivedAt: now, slot, inCreateTx: created.has(t.mint) };
       let book = this.books.get(t.mint);
       if (!book) {
         // A mint we've never seen mid-life (e.g. created before we connected) isn't worth buffering.
-        if (!raw.inCreateTx && !this.subscribed.has(t.mint)) continue;
+        if (!this.subscribed.has(t.mint)) continue;
         book = { balances: new Map(), buffered: [], lastSeen: now };
         this.books.set(t.mint, book);
       }
@@ -316,6 +341,8 @@ export class PumpChainFeed extends EventEmitter {
       mcapSol: t.vTokens > 0 ? (t.vSol / t.vTokens) * TOTAL_SUPPLY : 0,
       signature: t.signature,
       receivedAt: t.receivedAt,
+      slot: t.slot || undefined,
+      launchSlot: book.createSlot,
     };
     this.emit('trade', ev);
   }

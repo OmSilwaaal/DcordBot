@@ -113,6 +113,48 @@ export const GATES: Gate[] = [
     label: (g) => `> ${g.maxDrawdownPct}% off peak`,
     test: (f, g) => (f.drawdownPct > g.maxDrawdownPct ? `${p(f.drawdownPct)}% off peak` : null),
   },
+  // Wallet intelligence. Defaults are off (log-only); -1 means "unknown" and always passes.
+  {
+    key: 'launchBlock',
+    label: (g) => `launch-block wallets hold > ${g.maxLaunchBlockHoldPct}%`,
+    test: (f, g) =>
+      f.launchBlockHoldPct > g.maxLaunchBlockHoldPct ? `launch-block wallets hold ${p(f.launchBlockHoldPct)}%` : null,
+  },
+  {
+    key: 'slotCluster',
+    label: (g) => `same-block buyer groups hold > ${g.maxSlotClusterHoldPct}%`,
+    test: (f, g) =>
+      f.slotClusterHoldPct > g.maxSlotClusterHoldPct ? `same-block buyer groups hold ${p(f.slotClusterHoldPct)}%` : null,
+  },
+  {
+    key: 'earlySold',
+    label: (g) => `first buyers sold > ${g.maxEarlyBuyersSoldPct}%`,
+    test: (f, g) =>
+      f.earlyBuyersSoldPct > g.maxEarlyBuyersSoldPct ? `first buyers sold ${p(f.earlyBuyersSoldPct)}%` : null,
+  },
+  {
+    key: 'flippers',
+    label: (g) => `flippers hold > ${g.maxFlipperHoldPct}%`,
+    test: (f, g) => (f.flipperHoldPct > g.maxFlipperHoldPct ? `flippers hold ${p(f.flipperHoldPct)}%` : null),
+  },
+  {
+    key: 'serialSnipers',
+    label: (g) => `serial snipers hold > ${g.maxSerialSniperHoldPct}%`,
+    test: (f, g) =>
+      f.serialSniperHoldPct > g.maxSerialSniperHoldPct ? `serial snipers hold ${p(f.serialSniperHoldPct)}%` : null,
+  },
+  {
+    // A max, not a min: profitable wallets mostly profit by selling to later buyers.
+    key: 'profitableBuyers',
+    label: (g) => `profitable-wallet buyers > ${g.maxProfitableBuyers}`,
+    test: (f, g) =>
+      f.profitableBuyers > g.maxProfitableBuyers ? `${f.profitableBuyers} profitable-wallet buyers` : null,
+  },
+  {
+    key: 'loserBuyers',
+    label: (g) => `habitual losers buying (1m) > ${g.maxLoserBuyers1m}`,
+    test: (f, g) => (f.loserBuyers1m > g.maxLoserBuyers1m ? `${f.loserBuyers1m} habitual losers buying` : null),
+  },
 ];
 
 export const GATE_BY_KEY = new Map(GATES.map((g) => [g.key, g]));

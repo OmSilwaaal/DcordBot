@@ -12,7 +12,8 @@
     "start": "node dist/index.js",
     "dev": "tsc && node dist/index.js",
     "analyze": "node dist/tools/analyze.js",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "backfill": "node --max-old-space-size=6144 dist/tools/backfill.js"
   },
   "license": "MIT",
   "dependencies": {

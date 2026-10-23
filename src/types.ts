@@ -27,6 +27,10 @@ export interface TradeEvent {
   mcapSol: number;
   signature: string;
   receivedAt: number;
+  /** Block the trade landed in. Chain feed only; PumpPortal doesn't send it. */
+  slot?: number;
+  /** Block the token was created in, when the chain feed saw the create transaction. */
+  launchSlot?: number;
 }
 
 export interface MigrateEvent {
@@ -84,6 +88,35 @@ export interface Features {
   launchesPerMin: number;
   graduations1h: number;
   solChange1hPct: number;
+
+  // Wallet intelligence (stream-derived, so it exists for every tracked token).
+  // Launch-block fields are -1 when the creation block is unknown (PumpPortal trades, or launched before boot).
+  /** Non-dev wallets whose first buy landed in the token's creation block: the bundle signature. */
+  launchBlockBuyers: number;
+  /** % of supply those launch-block wallets still hold. */
+  launchBlockHoldPct: number;
+  /** % of supply held by wallets that first bought within 2 blocks (~1s) of creation. */
+  earlyBlocksHoldPct: number;
+  /** % of supply held by wallets that first bought in a block shared with ≥2 other first-time buyers. */
+  slotClusterHoldPct: number;
+  /** Share of the first 20 non-dev buyers' peak holdings they've already sold. */
+  earlyBuyersSoldPct: number;
+  /** % of unique buyers the wallet book has a track record for. */
+  knownBuyerPct: number;
+  /**
+   * Buyers with a profitable track record. On pump.fun these mostly profit by selling to later
+   * buyers, so in the backfill their presence predicted *worse* outcomes — not a "follow" signal.
+   */
+  profitableBuyers: number;
+  profitableHoldPct: number;
+  /** % of supply held by wallets that habitually sell within two minutes of buying. */
+  flipperHoldPct: number;
+  /** % of supply held by wallets that habitually buy in the first blocks of a launch. */
+  serialSniperHoldPct: number;
+  /** % of supply held by wallets that mostly lose money. */
+  loserHoldPct: number;
+  /** Habitual losers among wallets that bought in the last 60s: late buyers arriving at a top. */
+  loserBuyers1m: number;
 }
 
 /** Early-buyer forensics, computed at verify time on a sample of top holders + earliest buyers. */
@@ -165,6 +198,9 @@ export interface RugcheckResult {
   warnings: string[];
 }
 
+/** [seconds since start, low, high, close] for one 15s bucket. */
+export type PathPoint = [number, number, number, number];
+
 export interface PerfState {
   samples: number;
   lastMult: number;
@@ -174,6 +210,8 @@ export interface PerfState {
   checkpoints: Record<string, number | null>;
   graduated: boolean;
   lastUpdate: number;
+  /** Price path in 15s buckets since the signal: [sec, low, high, close] as multiples of entry. Lets exits be backtested. */
+  path?: PathPoint[];
   sim: {
     open: boolean;
     exitReason: 'tp' | 'sl' | 'time' | null;
