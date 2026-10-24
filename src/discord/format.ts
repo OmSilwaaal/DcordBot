@@ -154,6 +154,26 @@ export function resultLine(r: SignalRecord): string {
   );
 }
 
+function shadowLines(s: Summary): string {
+  return (
+    config.plan.shadow
+      .filter((pl) => s.shadow[pl.name])
+      .map((pl) => {
+        const v = s.shadow[pl.name];
+        const rule = [
+          pl.takeProfitMult !== null ? `TP ${pl.takeProfitMult}×` : null,
+          `SL −${pl.stopLossPct}%`,
+          pl.trailPct !== null ? `trail ${pl.trailPct}%` : null,
+          `${pl.timeStopMin}m`,
+        ]
+          .filter(Boolean)
+          .join(' · ');
+        return `${pl.name} (${rule}): n=${v.n} · TP ${p0(v.tpRate)} · SL ${p0(v.slRate)} · avg **${signed(v.avgReturnPct)}%** · med ${signed(v.medianReturnPct)}%`;
+      })
+      .join('\n') || '–'
+  );
+}
+
 export function statsEmbed(s: Summary, hours: number): EmbedBuilder {
   const tiers =
     Object.entries(s.byTier)
@@ -170,7 +190,7 @@ export function statsEmbed(s: Summary, hours: number): EmbedBuilder {
             `Avg return **${signed(s.avgReturnPct)}%** · Median ${signed(s.medianReturnPct)}%\n` +
             `Median peak ${mult(s.medianPeak)} · Peaked ≥2× ${p0(s.pct2x)} · ≥3× ${p0(s.pct3x)}`,
     )
-    .addFields({ name: 'By tier', value: tiers })
+    .addFields({ name: 'By tier', value: tiers }, { name: 'Shadow exits (same signals, comparison only)', value: shadowLines(s) })
     .setFooter({ text: 'Returns include entry slippage + round-trip costs. Peaks are not realizable returns.' });
 }
 

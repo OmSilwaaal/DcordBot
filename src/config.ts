@@ -27,6 +27,27 @@ function list(key: string, def: string[]): string[] {
   return v.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
+export interface ShadowPlan {
+  name: string;
+  /** null = no target. */
+  takeProfitMult: number | null;
+  stopLossPct: number;
+  /** Trailing stop distance below the high since entry; null = none. */
+  trailPct: number | null;
+  timeStopMin: number;
+}
+
+/** "name:tp:sl:trail:min" with 0 meaning none for tp and trail, e.g. "trail10:0:35:10:60". */
+function shadowPlans(key: string, def: string[]): ShadowPlan[] {
+  return list(key, def).map((spec) => {
+    const [name, ...rest] = spec.split(':');
+    const [tp, sl, trail, min] = rest.map(Number);
+    if (!name || rest.length !== 4 || ![tp, sl, trail, min].every(Number.isFinite))
+      throw new Error(`Env var ${key}: bad plan "${spec}", expected name:tp:sl:trail:min`);
+    return { name, takeProfitMult: tp || null, stopLossPct: sl, trailPct: trail || null, timeStopMin: min };
+  });
+}
+
 export const config = {
   discord: {
     token: str('DISCORD_TOKEN', ''),
@@ -211,6 +232,11 @@ export const config = {
     entrySlippagePct: num('PLAN_ENTRY_SLIPPAGE_PCT', 5),
     /** Fees + priority fees + exit slippage, round trip. */
     roundTripCostPct: num('PLAN_ROUND_TRIP_COST_PCT', 3),
+    /**
+     * Alternative exits forward-tested on the same signals, for comparison only (alerts show the main plan).
+     * Backtests on 15s price paths favored a trailing stop and quick exits, but couldn't resolve stop fills.
+     */
+    shadow: shadowPlans('SHADOW_EXIT_PLANS', ['trail10:0:35:10:60', 'trail20:0:35:20:60', 'quick2m:3:10:0:2', 'tp1.5:1.5:15:0:10']),
   },
 
   limits: {

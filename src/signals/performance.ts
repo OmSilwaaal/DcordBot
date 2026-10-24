@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { config } from '../config.js';
-import type { PerfState, SignalRecord } from '../types.js';
+import type { PerfState, SignalRecord, SimState } from '../types.js';
 import { appendJsonl, dataPath, readJson, readJsonl, writeJsonAtomic } from '../utils/files.js';
 import { median } from '../utils/math.js';
 import { pushPath } from '../utils/path.js';
@@ -23,9 +23,12 @@ export function newPerfState(): PerfState {
     graduated: false,
     lastUpdate: 0,
     path: [],
-    sim: { open: true, exitReason: null, exitMult: null, returnPct: null },
+    sim: openSim(),
+    shadow: Object.fromEntries(config.plan.shadow.map((s) => [s.name, { ...openSim(), highMult: 1 }])),
   };
 }
+
+const openSim = (): SimState => ({ open: true, exitReason: null, exitMult: null, returnPct: null });
 
 export interface Summary {
   n: number;
@@ -39,6 +42,8 @@ export interface Summary {
   pct2x: number;
   pct3x: number;
   byTier: Record<string, { n: number; avgReturnPct: number; tpRate: number }>;
+  /** Per shadow plan, over finished signals that carry it. */
+  shadow: Record<string, { n: number; avgReturnPct: number; medianReturnPct: number; tpRate: number; slRate: number }>;
 }
 
 /**
@@ -83,6 +88,8 @@ export class PerformanceTracker extends EventEmitter {
     if (elapsedMin < 0) return;
 
     const mult = mcapUsd / r.entryMcapUsd;
+    // Shadow time stops exit at the last price seen before their deadline, not this one.
+    this.closeExpiredShadows(r, elapsedMin);
     p.samples++;
     p.lastMult = mult;
     p.lastUpdate = ts;
@@ -99,6 +106,7 @@ export class PerformanceTracker extends EventEmitter {
       if (simMult <= 1 - this.plan.stopLossPct / 100) this.close(r, 'sl', simMult);
       else if (simMult >= this.plan.takeProfitMult) this.close(r, 'tp', this.plan.takeProfitMult);
     }
+    this.stepShadows(r, mult);
     this.dirty = true;
   }
 
@@ -114,6 +122,7 @@ export class PerformanceTracker extends EventEmitter {
   tick(now: number): void {
     for (const r of [...this.active.values()]) {
       if (now - r.signaledAt >= this.plan.timeStopMin * 60_000) this.finalize(r, now);
+      else if (this.closeExpiredShadows(r, (now - r.signaledAt) / 60_000)) this.dirty = true;
     }
   }
 
@@ -154,11 +163,53 @@ export class PerformanceTracker extends EventEmitter {
       pct2x: rate((r) => r.perf.peakMult >= 2),
       pct3x: rate((r) => r.perf.peakMult >= 3),
       byTier,
+      shadow: Object.fromEntries(
+        this.plan.shadow.flatMap((pl) => {
+          const ss: SimState[] = [];
+          for (const r of done) {
+            const x = r.perf.shadow?.[pl.name];
+            if (x && x.returnPct !== null) ss.push(x);
+          }
+          if (!ss.length) return [];
+          const rs = ss.map((x) => x.returnPct ?? 0);
+          const share = (reason: SimState['exitReason']) => (ss.filter((x) => x.exitReason === reason).length / ss.length) * 100;
+          const stats = { n: ss.length, avgReturnPct: rs.reduce((a, b) => a + b, 0) / rs.length, medianReturnPct: median(rs), tpRate: share('tp'), slRate: share('sl') };
+          return [[pl.name, stats]];
+        }),
+      ),
     };
   }
 
+  private stepShadows(r: SignalRecord, mult: number): void {
+    const simMult = mult / (1 + this.plan.entrySlippagePct / 100);
+    for (const pl of this.plan.shadow) {
+      const s = r.perf.shadow?.[pl.name];
+      if (!s?.open) continue;
+      let stop = 1 - pl.stopLossPct / 100;
+      if (pl.trailPct !== null) stop = Math.max(stop, s.highMult * (1 - pl.trailPct / 100));
+      if (simMult <= stop) this.closeSim(s, 'sl', simMult);
+      else if (pl.takeProfitMult !== null && simMult >= pl.takeProfitMult) this.closeSim(s, 'tp', pl.takeProfitMult);
+      else if (simMult > s.highMult) s.highMult = simMult;
+    }
+  }
+
+  /** Closes shadow plans whose time stop has passed at the last observed price. Returns whether any closed. */
+  private closeExpiredShadows(r: SignalRecord, elapsedMin: number): boolean {
+    let closed = false;
+    for (const pl of this.plan.shadow) {
+      const s = r.perf.shadow?.[pl.name];
+      if (!s?.open || elapsedMin < pl.timeStopMin) continue;
+      this.closeSim(s, 'time', r.perf.lastMult / (1 + this.plan.entrySlippagePct / 100));
+      closed = true;
+    }
+    return closed;
+  }
+
   private close(r: SignalRecord, reason: 'tp' | 'sl' | 'time', exitMult: number): void {
-    const s = r.perf.sim;
+    this.closeSim(r.perf.sim, reason, exitMult);
+  }
+
+  private closeSim(s: SimState, reason: 'tp' | 'sl' | 'time', exitMult: number): void {
     s.open = false;
     s.exitReason = reason;
     s.exitMult = exitMult;
@@ -169,6 +220,7 @@ export class PerformanceTracker extends EventEmitter {
     const p = r.perf;
     for (const c of CHECKPOINTS) if (p.checkpoints[c.key] === null) p.checkpoints[c.key] = p.lastMult;
     if (p.sim.open) this.close(r, 'time', p.lastMult / (1 + this.plan.entrySlippagePct / 100));
+    this.closeExpiredShadows(r, Infinity);
     r.finalizedAt = now;
     appendJsonl(this.doneFile, r);
     this.active.delete(r.mint);

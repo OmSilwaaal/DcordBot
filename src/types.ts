@@ -212,12 +212,16 @@ export interface PerfState {
   lastUpdate: number;
   /** Price path in 15s buckets since the signal: [sec, low, high, close] as multiples of entry. Lets exits be backtested. */
   path?: PathPoint[];
-  sim: {
-    open: boolean;
-    exitReason: 'tp' | 'sl' | 'time' | null;
-    exitMult: number | null;
-    returnPct: number | null;
-  };
+  sim: SimState;
+  /** Alternative exit plans run on the same prices, keyed by plan name. Signals from before this field existed lack it. */
+  shadow?: Record<string, SimState & { highMult: number }>;
+}
+
+export interface SimState {
+  open: boolean;
+  exitReason: 'tp' | 'sl' | 'time' | null;
+  exitMult: number | null;
+  returnPct: number | null;
 }
 
 export interface SignalRecord {

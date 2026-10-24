@@ -136,7 +136,7 @@ Expected cost on the Hobby plan: roughly 200–400 MB of RAM and a fraction of a
 
 ## Discord commands
 
-- `/stats [hours]`: plan hit rates (TP / SL / time), average and median return after slippage and costs, peak distribution, and results by tier.
+- `/stats [hours]`: plan hit rates (TP / SL / time), average and median return after slippage and costs, peak distribution, results by tier, and the shadow exit plans (`SHADOW_EXIT_PLANS`), which run alternative exits on the same signals for comparison.
 - `/recent`: the last 10 signals with live or final results.
 - `/filters`: the active thresholds and trade plan.
 - `/status`: live self-test. It checks the PumpPortal feed, launch flow, the trade stream, SOL price, the Solana RPC holder check (run on a real token the bot is tracking), RugCheck, DexScreener and storage, then lists the 5 tokens closest to signaling and what each is waiting on.
