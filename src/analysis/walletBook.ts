@@ -1,6 +1,8 @@
+import fs from 'node:fs';
 import { config } from '../config.js';
 import type { TokenState } from '../state/tracker.js';
 import { dataPath, readJson, writeJsonAtomic } from '../utils/files.js';
+import { log } from '../utils/logger.js';
 import { PUMP } from './features.js';
 
 /** [positions, wins, pnlSol, quickFlips, snipes, lastAt] — compact, because there are hundreds of thousands. */
@@ -39,7 +41,16 @@ export class WalletBook {
     private readonly cfg = config.walletBook,
     private readonly file = dataPath('wallets.json'),
   ) {
-    for (const [k, v] of readJson<[string, WalletRecord][]>(this.file, [])) this.wallets.set(k, v);
+    // A seed (e.g. data/backfill/wallets.json uploaded as wallets-seed.json) replaces the saved book once.
+    // It's a separate file because the running bot rewrites wallets.json every few minutes and on shutdown.
+    const seed = file.replace(/\.json$/, '-seed.json');
+    const source = fs.existsSync(seed) ? seed : this.file;
+    for (const [k, v] of readJson<[string, WalletRecord][]>(source, [])) this.wallets.set(k, v);
+    if (source === seed) {
+      fs.renameSync(seed, seed.replace(/\.json$/, `.applied-${Date.now()}.json`));
+      this.dirty = true;
+      log.info(`[wallets] loaded seed: ${this.wallets.size} wallets`);
+    }
   }
 
   get size(): number {
@@ -67,6 +78,8 @@ export class WalletBook {
 
   /** Records every non-dev wallet's position on a token that's leaving tracking. */
   recordToken(s: TokenState, now = Date.now()): void {
+    const buyers = s.firstBuyAt.size - (s.firstBuyAt.has(s.creator) ? 1 : 0);
+    if (buyers < this.cfg.minTokenBuyers) return;
     const price = s.mcapSol / PUMP.TOTAL_SUPPLY; // SOL per token
     const flipMs = this.cfg.flipSec * 1000;
     for (const [wallet, solIn] of s.walletSolIn) {

@@ -145,6 +145,12 @@ export const config = {
     sniperMinPct: num('WALLET_SNIPER_MIN_PCT', 50),
     /** Positions smaller than this are dust and aren't recorded. */
     minPositionSol: num('WALLET_MIN_POSITION_SOL', 0.01),
+    /**
+     * Only record positions on tokens that reached this many unique buyers. Dead tokens are mostly
+     * bots buying and selling within seconds, which labels far too many wallets as flippers; the
+     * backfill (which the gate thresholds were fitted on) only covers tokens with 20+ buyers.
+     */
+    minTokenBuyers: num('WALLET_BOOK_MIN_TOKEN_BUYERS', 20),
     maxWallets: num('WALLET_BOOK_MAX', 400_000),
     keepDays: num('WALLET_BOOK_KEEP_DAYS', 14),
   },
